@@ -124,7 +124,7 @@ extendint_Size(const ExtendVectorINT *vec)
  *          The extend vector structure.
  *
  * @param[in] eltnum
- *          The index of the elemnt to return.
+ *          The index of the element to return.
  *
  *******************************************************************************
  *
@@ -134,7 +134,7 @@ extendint_Size(const ExtendVectorINT *vec)
 pastix_int_t
 extendint_Read(const ExtendVectorINT *vec, pastix_int_t eltnum)
 {
-    assert(eltnum <= vec->eltnbr);
+    assert(eltnum < vec->eltnbr);
     return vec->inttab[eltnum];
 }
 

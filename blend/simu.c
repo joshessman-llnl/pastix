@@ -80,6 +80,8 @@ simuInit( SimuCtrl              *simuctrl,
     simuctrl->ftgtprio = 0;
     simuctrl->tasktab  = NULL;
     simuctrl->ftgtcnt  = 0;
+    simuctrl->steal = 0;
+    simuctrl->stealLocal = 0;
 
     /* Processor initialization */
     MALLOC_INTERN(simuctrl->proctab, procnbr, SimuProc);

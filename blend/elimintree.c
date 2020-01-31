@@ -55,9 +55,10 @@ eTreeInit( pastix_int_t nodenbr )
     enode = etree->nodetab;
     for(i=-1; i<nodenbr; i++, enode++)
     {
-        enode->total   =  0.0;
-        enode->subtree =  0.0;
-        enode->cripath =  0.0;
+        enode->ndecost =  0.0;
+        enode->ndepath =  0.0;
+        enode->subcost =  0.0;
+        enode->subpath =  0.0;
         enode->ndlevel = -1;
         enode->sonsnbr =  0;
         enode->fathnum = -1;
@@ -329,9 +330,9 @@ eTreeGenDot( const EliminTree *etree,
     {
         fprintf(stream, "\t\"%ld\" [label=\"#%ld\\nSubtree cost: %e\\nNode cost: %e\\nNode CP: %e\"]\n",
                 (long)i, (long)i,
-                etree->nodetab[i].subtree,
-                etree->nodetab[i].total,
-                etree->nodetab[i].cripath );
+                etree->nodetab[i].subcost,
+                etree->nodetab[i].ndepath,
+                etree->nodetab[i].subpath );
 
         if ((etree->nodetab[i]).fathnum == -1) {
             continue;

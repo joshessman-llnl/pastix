@@ -18,12 +18,13 @@
  **/
 #include "common.h"
 #include "symbol.h"
+#include "extendVector.h"
 #include "elimintree.h"
 #include "cost.h"
 #include "cand.h"
-#include "extendVector.h"
 #include "blendctrl.h"
 #include "queue.h"
+#include <stdbool.h>
 
 /**
  * @brief Minimal work ratio to accept the contribution from one additional candidate
@@ -41,6 +42,76 @@ typedef struct propmap_s {
     int               nocrossproc; /**< Enable/disable the distribution of one candidate on multiple branches */
 } propmap_t;
 
+/**
+ *******************************************************************************
+ *
+ * @brief Apply the proportional mapping algorithm to a subtree.
+ *
+ *******************************************************************************
+ *
+ * @param[in] pmptr
+ *          Pointer to the parameters of the proportional mapping algorithm.
+ *
+ * @param[in] rootnum
+ *          Index of the root of the subtree to process.
+ *
+ * @param[in] fcandnum
+ *          Rank of the first candidate attributed to this subtree.
+ *
+ * @param[in] lcandnum
+ *          Rank of the last candidate attributed to this subtree.
+ *
+ * @param[in] cluster
+ *          The cluster value for the subtree.
+ *
+ * @param[inout] cost_remain
+ *          Array of size (lcandnum-fcandnum+1).
+ *          Stores the remaining idle time of each candidate to balance the load
+ *          among them. On exit, the cost is updated with the affected subtrees.
+ *
+ *******************************************************************************/
+void
+propMappSubtreeRead( const propmap_t *pmptr,
+                     pastix_int_t     rootnum,
+                     pastix_int_t     fcandnum,
+                     pastix_int_t     lcandnum,
+                     pastix_int_t     cluster,
+                     double          *cost_remain )
+{
+    FILE *file = fopen( "propmap.dat", "r" );
+    int i, j, nodeidx, nbextra, candidx;
+
+    for ( i=0; i<pmptr->etree->nodenbr; i++ ) {
+        ExtendVectorINT *array;
+        if ( 2 != fscanf( file, "%d: %d",
+                          &nodeidx, &nbextra ) ) {
+            fprintf(stderr, "ERROR while reading the file\n");
+            continue;
+        }
+
+        array = &(pmptr->candtab[nodeidx-1].candidates);
+        extendint_Init( array, nbextra+1 );
+
+        fprintf( stderr, "%d: %d", nodeidx, nbextra );
+        for( j=0; j<nbextra; j++ ) {
+            if ( 1 != fscanf( file, ", %d", &candidx ) ) {
+                fprintf(stderr, "ERROR 2 while reading the file\n");
+                continue;
+            }
+
+            assert( (candidx-1 >= fcandnum) &&
+                    (candidx-1 <= lcandnum) );
+            extendint_Add( array, candidx-1);
+            fprintf( stderr, ", %d", candidx );
+        }
+        fprintf( stderr, "\n" ) ;
+        assert( extendint_Size( array ) == nbextra );
+    }
+
+    (void)rootnum;
+    (void)cluster;
+    (void)cost_remain;
+}
 
 /**
  *******************************************************************************
@@ -158,13 +229,15 @@ propMappSubtree( const propmap_t *pmptr,
         return;
     }
 
+    assert( pmptr->etree->nodetab[rootnum].ndecost <= pmptr->etree->nodetab[rootnum].subcost );
+
     /* Work that each processor is intended to get from this treenode */
-    isocost = pmptr->etree->nodetab[rootnum].total / candnbr;
+    isocost = pmptr->etree->nodetab[rootnum].ndecost / candnbr;
     for(p=0;p<candnbr;p++)
         cost_remain[p] -= isocost;
 
     /* Get cost remaining in the descendance of the treenode */
-    aspt_cost = pmptr->etree->nodetab[rootnum].subtree - pmptr->etree->nodetab[rootnum].total;
+    aspt_cost = pmptr->etree->nodetab[rootnum].subcost - pmptr->etree->nodetab[rootnum].ndecost;
 
     /*
      * If the first and last candidate have already received more work that they
@@ -202,15 +275,14 @@ propMappSubtree( const propmap_t *pmptr,
     /* Create the list of sons sorted by descending order of cost */
     MALLOC_INTERN(queue_tree, 1, pastix_queue_t);
     pqueueInit(queue_tree, sonsnbr);
+    double soncost;
     for(i=0; i<sonsnbr; i++)
     {
-        double soncost;
-
         /* Cost in the current subtree to be mapped */
-        cumul_cost = -pmptr->etree->nodetab[eTreeSonI(pmptr->etree, rootnum, i)].subtree;
+        cumul_cost = -pmptr->etree->nodetab[eTreeSonI(pmptr->etree, rootnum, i)].subcost;
 
         /* Cost of the root node in the subtree */
-        soncost    = -pmptr->etree->nodetab[eTreeSonI(pmptr->etree, rootnum, i)].total;
+        soncost    = -pmptr->etree->nodetab[eTreeSonI(pmptr->etree, rootnum, i)].ndecost;
 
         pqueuePush2(queue_tree, i, cumul_cost, (pastix_int_t)soncost);
     }
@@ -361,10 +433,253 @@ propMappSubtree( const propmap_t *pmptr,
     return;
 }
 
-
 /**
  * @}
  */
+
+typedef struct procShared_s {
+    const EliminTree *etree;   /**< Elimination tree to map*/
+    double           *rsrctab; /**< computing resource assigned to each node*/
+    int              *proctab; /**< computing core assigned to each node*/
+} procShared_t;
+
+double GetMS(const EliminTree* treeobj, double* resourceAssigned, pastix_int_t nodeIndex){
+    if (treeobj->nodetab[nodeIndex].subpath!=0) {//which means it has been calculated already
+        return treeobj->nodetab[nodeIndex].subpath;
+    }
+
+    double msSequential = treeobj->nodetab[nodeIndex].ndecost/resourceAssigned[nodeIndex];
+    double msParallel = 0, makespan_subtree;
+
+    pastix_int_t sonsnbr = treeobj->nodetab[nodeIndex].sonsnbr;
+    pastix_int_t childIndex;
+    for (int i=0; i<sonsnbr; ++i) {
+        childIndex = eTreeSonI(treeobj, nodeIndex, i);
+        makespan_subtree = GetMS(treeobj, resourceAssigned, childIndex);
+        if (makespan_subtree > msParallel) {
+            msParallel = makespan_subtree;
+        }
+    }
+
+    treeobj->nodetab[nodeIndex].subpath = msSequential + msParallel;
+
+    return treeobj->nodetab[nodeIndex].subpath;
+}
+
+void updateMakespan(procShared_t* allData){
+    (void)allData;
+    /* pastix_int_t rootIndex = eTreeRoot(allData->etree); */
+
+    /* pastix_int_t nodenbr = allData->etree->nodenbr; */
+    /* for(int i=0; i<nodenbr; i++) { */
+    /*     allData->etree->nodetab[i].subpath = 0;//label it as uncomputed */
+    /* } */
+
+    /* double makespan = GetMS(allData->etree, allData->rsrctab, rootIndex); */
+}
+
+void shareEqual( procShared_t *compoundData,
+                 pastix_int_t  nodeIndex,
+                 double        pSource)
+{
+    pastix_int_t sonsnbr;
+    pastix_int_t childIndex;
+    double computingResource;
+
+    sonsnbr = compoundData->etree->nodetab[nodeIndex].sonsnbr;
+    computingResource = pSource / (double)sonsnbr;
+    for (int i=0; i<sonsnbr; ++i) {
+        childIndex = eTreeSonI(compoundData->etree, nodeIndex, i);
+        compoundData->rsrctab[childIndex] += computingResource;
+        shareEqual(compoundData, childIndex, computingResource);
+    }
+}
+
+pastix_int_t GetChildLastTerminate(const EliminTree* treeobj, pastix_int_t parentIndex){
+    //make sure that there is at least a child before call it
+    pastix_int_t sonsnbr = treeobj->nodetab[parentIndex].sonsnbr;
+    pastix_int_t childLastTerminate;
+    pastix_int_t childIndex;
+    double makespan_subtree, temp;
+
+    assert( sonsnbr > 0 );
+
+    childIndex = eTreeSonI(treeobj, parentIndex, 0);
+    temp = treeobj->nodetab[childIndex].subpath;
+    childLastTerminate = childIndex;
+
+    for (int i=1; i<sonsnbr; ++i) {
+        childIndex = eTreeSonI(treeobj, parentIndex, i);
+        makespan_subtree = treeobj->nodetab[childIndex].subpath;
+        if (makespan_subtree > temp) {
+            temp = makespan_subtree;
+            childLastTerminate = childIndex;
+        }
+    }
+
+    return childLastTerminate;
+}
+
+void Reallocate( Cand* candtab, double* Presource,
+                 pastix_int_t pStart, pastix_int_t pEnd, pastix_int_t custerID,
+                 const EliminTree* treeobj, pastix_int_t nodeIndex, double* pAssigned )
+{
+    //Assign all processors between pStart and pEnd to node i;
+    candtab[nodeIndex].fcandnum = pStart;
+    candtab[nodeIndex].lcandnum = pEnd;
+    candtab[nodeIndex].cluster = custerID;
+
+    double* resourceRemainChild;
+    pastix_int_t candnbrChild;
+
+    double powerAssigned;//, fractpart, intpart;
+    pastix_int_t childIndex, childpStart=pStart, childpEnd;
+    pastix_int_t local_index=0;
+    pastix_int_t sonsnbr = treeobj->nodetab[nodeIndex].sonsnbr;
+
+    assert( (pEnd - pStart + 1) > 0 );
+
+    for (int i=0; i<sonsnbr; ++i) {
+        childIndex = eTreeSonI(treeobj, nodeIndex, i);
+        powerAssigned = pAssigned[childIndex];
+        assert( powerAssigned > 0. );
+        //fractpart = modf(powerAssigned, &intpart);//x_k+y_k=assigned_i
+
+        childpEnd = childpStart;
+        assert( local_index < (pEnd - pStart + 1) );
+        powerAssigned = powerAssigned - Presource[local_index];
+        while (powerAssigned > (0.1*CROSS_TOLERANCE) ) {//Minimal work participation
+            childpEnd++;
+            local_index++;
+            assert( local_index < (pEnd - pStart + 1) );
+            powerAssigned = powerAssigned - Presource[local_index];
+        }
+
+        candnbrChild = childpEnd-childpStart+1;
+        MALLOC_INTERN(resourceRemainChild, candnbrChild, double);
+        for (int i = 0; i < candnbrChild; ++i) {
+            resourceRemainChild[i] = Presource[ childpStart - pStart + i ];
+        }
+
+        if ( powerAssigned < 0 ) {
+            resourceRemainChild[candnbrChild-1] = 1 + powerAssigned;
+            Presource[ childpStart - pStart + candnbrChild - 1 ] = -powerAssigned;
+        }
+
+        Reallocate(candtab, resourceRemainChild, childpStart, childpEnd, custerID, treeobj, childIndex, pAssigned);
+        memFree_null(resourceRemainChild);
+
+        if (powerAssigned<0) {
+            childpStart = childpEnd;
+        }else{
+            childpStart = childpEnd+1;
+            local_index++;
+        }
+    }
+}
+
+void Allocate(Cand* candtab, const EliminTree* etree, pastix_int_t candnbr, double* pAssigned){
+    double* resourceRemain = NULL;
+
+    MALLOC_INTERN(resourceRemain, candnbr, double);
+    for (int i = 0; i < candnbr; ++i) {
+        resourceRemain[i] = 1;
+    }
+
+    Reallocate(candtab, resourceRemain, 0, candnbr-1, 0, etree, eTreeRoot(etree), pAssigned);
+
+    memFree_null(resourceRemain);
+}
+
+bool AddOneProcShared(procShared_t* compoundData, pastix_int_t nodeIndex){
+    bool success_this_turn = false;
+    bool success_child_turn;
+    double ms_before, ms_after;
+    pastix_int_t sonsnbr;
+    pastix_int_t rootIndex = eTreeRoot(compoundData->etree);
+    pastix_int_t child_last_finish;//node j ← the child with the largest makespan;
+
+    updateMakespan(compoundData);
+    ms_before = compoundData->etree->nodetab[rootIndex].subpath;//how to compute the makespan?
+    sonsnbr   = compoundData->etree->nodetab[nodeIndex].sonsnbr;
+    while ((compoundData->proctab[nodeIndex] > 1) &&
+           (sonsnbr > 0))
+    {
+        child_last_finish = GetChildLastTerminate(compoundData->etree, nodeIndex);
+        shareEqual(compoundData, nodeIndex,        -1);//remove one computing resource from subtree rooted at i
+        shareEqual(compoundData, child_last_finish, 1);//add it to subtree j
+        compoundData->rsrctab[child_last_finish] += 1;
+
+        updateMakespan(compoundData);
+        ms_after = compoundData->etree->nodetab[rootIndex].subpath;
+
+        if (ms_after<=ms_before) {//success
+            success_this_turn = true;
+            compoundData->proctab[nodeIndex]         -= 1;//remove a processor core from node i
+            compoundData->proctab[child_last_finish] += 1;//to node j
+
+            ms_before = ms_after;
+
+            success_child_turn = AddOneProcShared(compoundData, child_last_finish);
+            if (success_child_turn == true) {
+                updateMakespan(compoundData);
+                ms_before = compoundData->etree->nodetab[rootIndex].subpath;
+            }
+        } else {//failure
+            success_this_turn = false;
+
+            //restore computing resources assigned
+            compoundData->rsrctab[child_last_finish] -= 1;
+            shareEqual(compoundData, child_last_finish, -1);
+            shareEqual(compoundData, nodeIndex,          1);
+            break;
+        }
+    }
+
+    return success_this_turn;
+}
+
+void ProcShared(const EliminTree   *treeobj,
+                pastix_int_t candNbr,
+                Cand* candtab)
+{
+    pastix_int_t nodenbr = treeobj->nodenbr;
+    procShared_t allData;
+    pastix_int_t candNumber = candNbr;
+    double *rsrctab = NULL;
+    int    *proctab = NULL;
+
+    MALLOC_INTERN(rsrctab, nodenbr+1, double);
+    MALLOC_INTERN(proctab, nodenbr+1, int);
+
+    memset( rsrctab, 0, (nodenbr+1) * sizeof(double) );
+    memset( proctab, 0, (nodenbr+1) * sizeof(int) );
+
+    allData.etree = treeobj;
+    allData.rsrctab = rsrctab + 1;
+    allData.proctab = proctab + 1;
+
+    /* Assign a processor to root of \tau */
+    pastix_int_t rootIndex = eTreeRoot(treeobj);
+    while (candNumber>0) {
+        allData.rsrctab[rootIndex] = allData.rsrctab[rootIndex]+1.;
+        allData.proctab[rootIndex] = allData.proctab[rootIndex]+1.;
+        shareEqual(&allData, rootIndex, 1.);
+        AddOneProcShared(&allData, rootIndex);
+        candNumber--;
+    }
+
+#if !defined(NDEBUG)
+    for(int i=0; i<=nodenbr; i++) {
+        assert( rsrctab[i] > 0. );
+    }
+#endif
+
+    Allocate(candtab, treeobj, candNbr, allData.rsrctab);
+
+    memFree_null(proctab);
+    memFree_null(rsrctab);
+}
 
 /**
  *******************************************************************************
@@ -425,17 +740,17 @@ propMappTree( Cand               *candtab,
     pmdata.candnbr     = candnbr;
     pmdata.nocrossproc = nocrossproc;
 
-    if ( allcand ) {
+    if ( allcand == 1 ) {
         propMappSubtreeOn1P( &pmdata, eTreeRoot(etree),
-                             0, candnbr-1, 0 );
-    }
-    else {
+                            0, candnbr-1, 0 );
+    } else {
+        /*steal technique will be used in simulation*/
         double *cost_remain = NULL;
         double isocost;
 
         /* Prepare the initial cost_remain array */
         MALLOC_INTERN(cost_remain, candnbr, double);
-        isocost = etree->nodetab[ eTreeRoot(etree) ].subtree / candnbr;
+        isocost = etree->nodetab[ eTreeRoot(etree) ].subcost / candnbr;
 
         for(p=0; p<candnbr; p++) {
             cost_remain[p] = isocost;
@@ -443,7 +758,7 @@ propMappTree( Cand               *candtab,
 
         propMappSubtree( &pmdata, eTreeRoot(etree),
                          0, candnbr-1,
-                         0, cost_remain);
+                         0, cost_remain );
 
         memFree_null(cost_remain);
     }

@@ -46,6 +46,13 @@ static int pastix_mpi_init   = 0;  /**< Boolean to know if MPI has been initiali
 static volatile pastix_atomic_lock_t pastix_mpi_lock = PASTIX_ATOMIC_UNLOCKED; /**< Lock to protect the MPI initialization */
 #endif
 
+#if defined(PASTIX_OS_WINDOWS)
+#define pastix_mkdir( __str ) mkdir( (__str) )
+#else
+#define pastix_mkdir( __str ) mkdir( (__str), 0700 )
+#endif
+
+
 /**
  *******************************************************************************
  *

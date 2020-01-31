@@ -19,6 +19,7 @@
 #include <pastix.h>
 #include <spm.h>
 #include <limits.h>
+#include "common.h"
 
 int main (int argc, char **argv)
 {
@@ -65,6 +66,7 @@ int main (int argc, char **argv)
     /**
      * Perform ordering, symbolic factorization, and analyze steps
      */
+    //pastix_data->inter_node_procnbr = 12;
     pastix_task_analyze( pastix_data, spm );
 
     spmExit( spm );

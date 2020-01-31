@@ -214,7 +214,7 @@ cpucblk_zrecv_rhs_forward( const SolverMatrix *solvmtx,
 #endif
 
     rc = MPI_Recv( work, colnbr, PASTIX_MPI_COMPLEX64,
-                   MPI_ANY_SOURCE, cblk->gcblknum, solvmtx->solv_comm, &status );
+                   cblk->ownerid, cblk->gcblknum, solvmtx->solv_comm, &status );
     assert( rc == MPI_SUCCESS );
 
 #if defined (PASTIX_DEBUG_MPI)

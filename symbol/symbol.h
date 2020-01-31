@@ -34,6 +34,9 @@
 #define SYMBCBLK_PROJ    1
 #define SYMBCBLK_KWAY    2
 
+struct etree_s;
+typedef struct etree_s EliminTree;
+
 /**
  * @brief Symbol column block structure.
  */
@@ -56,6 +59,9 @@ typedef struct symbol_blok_s {
     pastix_int_t lrownum; /**< Last row index (inclusive) */
     pastix_int_t lcblknm; /**< Local column block         */
     pastix_int_t fcblknm; /**< Facing column block        */
+    double cripath;  /**< Length of the critical path to reach this node (It is the minimum amount of time/flops required before being able to compute this node */
+    double trsmcost; /**< This is the cost of computing the TRSM on this block. 0 if a diagonal block */
+    double gemmcost; /**< This is the cost of the generated gemm with the off-diagonal blocks below (xxTRF for the diagonal block) */
 } symbol_blok_t;
 
 /**
@@ -115,16 +121,22 @@ int pastixSymbolDraw( const symbol_matrix_t *symbptr, FILE *stream );
  */
 void         pastixSymbolPrintStats( const symbol_matrix_t *symbptr );
 pastix_int_t pastixSymbolGetNNZ( const symbol_matrix_t *symbptr );
-void         pastixSymbolGetFlops( const symbol_matrix_t *symbmtx,
-                                   pastix_coeftype_t      flttype,
-                                   pastix_factotype_t     factotype,
-                                   double                *thflops,
-                                   double                *rlflops );
-void         pastixSymbolGetTimes( const symbol_matrix_t *symbmtx,
-                                   pastix_coeftype_t      flttype,
-                                   pastix_factotype_t     factotype,
-                                   double                *cblkcost,
-                                   double                *blokcost );
+void         pastixSymbolGetFlops ( const symbol_matrix_t *symbmtx,
+                                    pastix_coeftype_t      flttype,
+                                    pastix_factotype_t     factotype,
+                                    double                *thflops,
+                                    double                *rlflops );
+void         pastixSymbolGetTimes ( const symbol_matrix_t *symbmtx,
+                                    pastix_coeftype_t      flttype,
+                                    pastix_factotype_t     factotype,
+                                    double                *cblkcost,
+                                    double                *blokcost );
+void         pastixSymbolGetFlops2( const symbol_matrix_t *symbmtx,
+                                    pastix_coeftype_t      flttype,
+                                    pastix_factotype_t     factotype,
+                                    EliminTree            *etree,
+                                    double                *cblkcost,
+                                    double                *blokcost );
 
 /**
  * @}

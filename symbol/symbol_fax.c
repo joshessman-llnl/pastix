@@ -320,6 +320,9 @@ pastixSymbolFax( symbol_matrix_t * const symbptr,
             bloktax[bloknum].lrownum = cblktax[cblknum].lcolnum;
             bloktax[bloknum].lcblknm = cblknum;
             bloktax[bloknum].fcblknm = cblknum;
+            bloktax[bloknum].cripath  = 0.;
+            bloktax[bloknum].trsmcost = 0.;
+            bloktax[bloknum].gemmcost = 0.;
             bloknum ++;
 
             for (sortnum = 0; sortnum < sortnbr; ) {    /* For all entries in sorted array */
@@ -350,6 +353,9 @@ pastixSymbolFax( symbol_matrix_t * const symbptr,
                 bloktax[bloknum].lrownum = sorttab[sortnum - 1]; /* Set end of block */
                 bloktax[bloknum].lcblknm = cblknum;
                 bloktax[bloknum].fcblknm = cblkctr;
+                bloktax[bloknum].cripath  = 0.;
+                bloktax[bloknum].trsmcost = 0.;
+                bloktax[bloknum].gemmcost = 0.;
                 bloknum ++;                               /* One more block */
             }
         }
@@ -482,6 +488,9 @@ pastixSymbolFax( symbol_matrix_t * const symbptr,
                 bloktax[bloknum].lrownum = tloktab[tloknum].lrownum;
                 bloktax[bloknum].lcblknm = cblknum;
                 bloktax[bloknum].fcblknm = tloktab[tloknum].fcblknm;
+                bloktax[bloknum].cripath  = 0.;
+                bloktax[bloknum].trsmcost = 0.;
+                bloktax[bloknum].gemmcost = 0.;
             }
         }
         if ((bloknum - cblktax[cblknum].bloknum) > 2) { /* If more than one extra-diagonal blocks exist                 */

@@ -12,6 +12,7 @@
 ###
 
 DIRNAME=$1
+SCRIPTDIR=$( dirname $0 )
 
 FILENAME=$DIRNAME/blend.trace
 
@@ -22,7 +23,7 @@ for i in $THREADS
 do
     grep ";${i};"  /tmp/all_counters.csv > /tmp/counters.csv
 
-    python3 ./clean_counters.py > /tmp/counters_${i}.csv
+    python3 $SCRIPTDIR/clean_counters.py > /tmp/counters_${i}.csv
 done
 
 sed '/^3[0-2] .*$/d' $FILENAME > /tmp/header

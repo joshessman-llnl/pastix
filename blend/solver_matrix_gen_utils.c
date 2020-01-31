@@ -31,6 +31,243 @@
 #include "simu.h"
 #include "solver_matrix_gen_utils.h"
 
+static inline int
+is_value_inside( pastix_int_t value, pastix_int_t *array,
+                 pastix_int_t begin, pastix_int_t  end )
+{
+    pastix_int_t idx = (begin + end)/2;
+    pastix_int_t nbegin, nend;
+
+    if( value == array[idx] )
+        return 1;
+
+    nbegin = (value > array[idx]) ? idx : begin;
+    nend   = (value < array[idx]) ? idx : end;
+
+    if( (nbegin == begin) && (nend == end) )
+        return 0;
+
+    return is_value_inside(value, array, nbegin, nend );
+}
+
+static inline int
+is_fblok_contributor( const symbol_blok_t *blok,
+                      const symbol_blok_t *fblk,
+                            pastix_int_t  *array,
+                            pastix_int_t   size )
+{
+    if( is_value_inside(fblk->lcblknm, array, 0, size) )
+    {
+        return ( (fblk->frownum >= blok->frownum) &&
+                 (fblk->lrownum <= blok->lrownum) );
+    }
+    return 0;
+}
+/**
+ *******************************************************************************
+ *
+ * @brief Compute the bloknbr of a remote cblk
+ *
+ *******************************************************************************
+ *
+ * @param[in] symbmtx
+ *          The pointer to the symbol matrix.
+ *
+ * @param[in] symbcblk
+ *          The pointer to the current symbol cblk.
+ *
+ * @param[in] simuctrl
+ *          The pointer to simuctrl structure.
+ *
+ * @param[in] ownerid
+ *          Owner of the cblk.
+ *
+ * @return The number of bloks in the cblk
+ *
+ *******************************************************************************/
+pastix_int_t
+solvMatGen_remote_bloknbr( const symbol_matrix_t *symbmtx,
+                           const symbol_cblk_t   *symbcblk,
+                           const SimuCtrl        *simuctrl,
+                                 int              ownerid )
+{
+    symbol_blok_t *symbblok, *fsymbblk;
+    pastix_int_t   i, size, browidx, browmax;
+    pastix_int_t   nbbloks, bloknum, bloknbr;
+    pastix_int_t   brownbr = symbcblk[1].brownum - symbcblk[0].brownum;
+    pastix_int_t  *ctrb_cblk;
+
+    MALLOC_INTERN(ctrb_cblk, brownbr, pastix_int_t);
+    /* Get the number of contributors with the same ownerid */
+    size = 0;
+    for ( i=0; i<brownbr; i++)
+    {
+        bloknum  = symbmtx->browtab[symbcblk->brownum + i ];
+        symbblok = symbmtx->bloktab + bloknum;
+        if( ownerid == simuctrl->bloktab[bloknum].ownerclust ) {
+            ctrb_cblk[size] = symbblok->lcblknm;
+            size++;
+        }
+    }
+    assert(size <= brownbr);
+    ctrb_cblk = (pastix_int_t*)realloc( ctrb_cblk, size * sizeof(pastix_int_t) );
+
+    /* Compute the bloknbr of the cblk */
+    nbbloks  = symbcblk[1].bloknum - symbcblk[0].bloknum - 1;
+    bloknbr  = 1;
+
+    /* The diagonal blok is already in */
+    symbblok = symbmtx->bloktab + symbcblk->bloknum + 1;
+    for( i=0; i<nbbloks; i++, symbblok++ )
+    {
+        browidx = symbmtx->cblktab[symbblok->fcblknm].brownum;
+        browmax = symbmtx->cblktab[symbblok->fcblknm + 1].brownum;
+
+        fsymbblk = symbmtx->bloktab + symbmtx->browtab[ browidx ];
+        /* Check all regarding bloks */
+        while ( (fsymbblk < symbblok) && (browidx < browmax) )
+        {
+            if( is_fblok_contributor(symbblok, fsymbblk, ctrb_cblk, size) &&
+               (ownerid == simuctrl->bloktab[ fsymbblk - symbmtx->bloktab ].ownerclust) ) {
+                bloknbr++;
+                break;
+            }
+
+            browidx++;
+            fsymbblk = symbmtx->bloktab + symbmtx->browtab[ browidx ];
+        }
+    }
+    memFree_null(ctrb_cblk);
+    return bloknbr;
+}
+
+/**
+ *******************************************************************************
+ *
+ * @brief Compute the bloknbr of a remote cblk
+ *
+ *******************************************************************************
+ *
+ * @param[in] symbmtx
+ *          The pointer to the symbol matrix.
+ *
+ * @param[in] symbcblk
+ *          The pointer to the current symbol cblk.
+ *
+ * @param[in] simuctrl
+ *          The pointer to simuctrl structure.
+ *
+ * @param[inout] solvcblk
+ *          The pointer to current SolverCblk. The fcolnum and lcolnum will be
+ *          updated.
+ *
+ *  @param[inout] solvblok
+ *          The pointer to current solverBlok.
+ *
+ * @param[in] lcblknum
+ *         Local cblk index in cblktab
+ *
+ * @param[in] layout2D
+ *          Is layout2D ?
+ *
+ * @param[in] ownerid
+ *          Owner of the cblk.
+ *
+ * @return The number of bloks in the cblk
+ *
+ *******************************************************************************/
+pastix_int_t
+solvMatGen_remote_bloks( const symbol_matrix_t *symbmtx,
+                         const symbol_cblk_t   *symbcblk,
+                         const SimuCtrl        *simuctrl,
+                               SolverCblk      *solvcblk,
+                               SolverBlok      *solvblok,
+                               pastix_int_t     lcblknum,
+                               pastix_int_t     layout2D,
+                               int              ownerid )
+{
+    symbol_blok_t *symbblok, *fsymbblk;
+    SolverBlok    *fblok = solvblok;
+    pastix_int_t   i, size, browidx, browmax, brownbr;
+    pastix_int_t   nbbloks, bloknum;
+    pastix_int_t   fcolnum, lcolnum;
+    pastix_int_t   frownum, lrownum;
+    pastix_int_t   sfrownum, slrownum;
+    pastix_int_t   nbcols, stride = 0;
+    pastix_int_t  *ctrb_cblk;
+    int            exist;
+
+    symbblok = symbmtx->bloktab + symbcblk->bloknum;
+    brownbr  = symbcblk[1].brownum - symbcblk[0].brownum;
+    browidx  = symbmtx->cblktab[symbblok->fcblknm].brownum;
+    fcolnum  = symbmtx->cblktab[symbmtx->cblknbr - 1].lcolnum;
+    lcolnum  = 0;
+
+    /* First loop : get accurate fcolnum and lcolnum */
+    MALLOC_INTERN(ctrb_cblk, brownbr, pastix_int_t);
+    size = 0;
+    for( i=0; i<brownbr; i++, browidx++ ) {
+        fsymbblk = symbmtx->bloktab + symbmtx->browtab[ browidx ];
+        bloknum  = fsymbblk - symbmtx->bloktab;
+        if( ownerid != simuctrl->bloktab[bloknum].ownerclust ) {
+            continue;
+        }
+
+        ctrb_cblk[size] = fsymbblk->lcblknm;
+        size++;
+        solvMatGen_get_rownum( symbmtx, fsymbblk, &frownum, &lrownum );
+        fcolnum = pastix_imin( fcolnum, frownum );
+        lcolnum = pastix_imax( lcolnum, lrownum );
+    }
+    assert(size <= brownbr);
+    ctrb_cblk = (pastix_int_t*)realloc( ctrb_cblk, size * sizeof(pastix_int_t) );
+
+    solvcblk->fcolnum = fcolnum;
+    solvcblk->lcolnum = lcolnum;
+    nbcols  = lcolnum - fcolnum + 1;
+    nbbloks = symbcblk[1].bloknum - symbcblk[0].bloknum;
+    for( i=0; i<nbbloks; i++, symbblok++ )
+    {
+        browidx  = symbmtx->cblktab[symbblok->fcblknm].brownum;
+        browmax  = symbmtx->cblktab[symbblok->fcblknm + 1].brownum;
+
+        fsymbblk = symbmtx->bloktab + symbmtx->browtab[ browidx ];
+        sfrownum = symbblok->lrownum;
+        slrownum = symbblok->frownum;
+        exist    = 0;
+        while( (fsymbblk < symbblok) && (browidx < browmax) )
+        {
+            if( is_fblok_contributor(symbblok, fsymbblk, ctrb_cblk, size) &&
+               (ownerid == simuctrl->bloktab[fsymbblk - symbmtx->bloktab].ownerclust) ) {
+
+                solvMatGen_get_rownum( symbmtx, fsymbblk, &frownum, &lrownum );
+                sfrownum = pastix_imin( sfrownum, frownum );
+                slrownum = pastix_imax( slrownum, lrownum );
+                exist = 1;
+            }
+            browidx++;
+            fsymbblk = symbmtx->bloktab + symbmtx->browtab[ browidx ];
+        }
+        if( exist ) {
+            assert(sfrownum >= symbblok->frownum );
+            assert(slrownum <= symbblok->lrownum );
+
+            solvMatGen_init_blok( solvblok,
+                                  lcblknum, -1,
+                                  sfrownum, slrownum,
+                                  stride, nbcols, layout2D );
+            stride += (slrownum - sfrownum + 1);
+            solvblok->gbloknm = -1;
+            solvblok++;
+        }
+    }
+    assert( (solvblok - fblok) ==  solvMatGen_remote_bloknbr(symbmtx, symbcblk, simuctrl, ownerid) );
+    memFree_null(ctrb_cblk);
+
+    return stride;
+}
+
+
 /**
  *******************************************************************************
  *
@@ -163,8 +400,8 @@ solvMatGen_fill_localnums( const symbol_matrix_t *symbmtx,
                 if( countcluster[j] != 0 ){
                     pcbklocalnum[i]++;                              /* Amount of receptions for cblk i */
                     recv_sources[recvnbr] = j;                      /* Register source                 */
-                    localindex[clustnum] +=  (symbcblk[1].bloknum
-                                            - symbcblk[0].bloknum); /* Duplicate the amount of bloks   */
+                    /* Duplicate the amount of for this owner */
+                    localindex[clustnum] += solvMatGen_remote_bloknbr( symbmtx,symbcblk, simuctrl, j );
                     brownbr++;                                      /* One more blok will be in the browtab */
                     cblknum++;                                      /* Add one cblk                    */
                     recvnbr++;                                      /* Add one reception count         */
@@ -193,11 +430,12 @@ solvMatGen_fill_localnums( const symbol_matrix_t *symbmtx,
                 }
             }
         }
-
         /*
          * If this is a fanin, we compute the size of the local browtab
          */
         if ( fcbklocalnum[i] != -1 ) {
+            localindex[clustnum] -= ( symbcblk[1].bloknum - symbcblk[0].bloknum
+                                    - solvMatGen_remote_bloknbr( symbmtx,symbcblk, simuctrl, clustnum ) );
             for ( j = symbcblk[0].brownum; j < symbcblk[1].brownum; j++ ) {
                 k = symbmtx->browtab[j];
                 c = simuctrl->bloktab[k].ownerclust;
@@ -439,7 +677,7 @@ solvMatGen_fill_ttsktab( isched_thread_t *ctx, void *args )
     pastix_int_t priomin = PASTIX_INT_MAX;
     pastix_int_t priomax = 0;
     pastix_int_t ttsknbr = extendint_Size( simuproc->tasktab );
-    pastix_int_t j, jloc;
+    pastix_int_t j, jloc, cblknum;
 
     solvmtx->ttsknbr[rank] = ttsknbr;
     if(ttsknbr > 0) {
@@ -459,13 +697,12 @@ solvMatGen_fill_ttsktab( isched_thread_t *ctx, void *args )
             jloc = j;
         }
         /* Only local cblks should appear in the tasktab */
-        assert( !(solvmtx->cblktab[ solvmtx->tasktab[jloc].cblknum ].cblktype & (CBLK_FANIN|CBLK_RECV)) );
+        cblknum = solvmtx->tasktab[jloc].cblknum;
+        assert( !(solvmtx->cblktab[ cblknum ].cblktype & CBLK_FANIN) );
         solvmtx->ttsktab[rank][i] = jloc;
-        solvmtx->cblktab[jloc].threadid = rank;
 
-#if defined(PASTIX_DYNSCHED)
-        solvmtx->tasktab[jloc].threadid = rank;
-#endif
+        solvmtx->cblktab[cblknum].threadid = rank;
+
         priomax = pastix_imax( solvmtx->tasktab[jloc].prionum, priomax );
         priomin = pastix_imin( solvmtx->tasktab[jloc].prionum, priomin );
     }
@@ -495,7 +732,7 @@ solvMatGen_fill_ttsktab_dbg( isched_thread_t *ctx, void *args )
 {
     struct args_ttsktab *arg = (struct args_ttsktab*)args;
 
-    pastix_int_t  i, j, size;
+    pastix_int_t  i, j, jloc, size;
     SolverMatrix *solvmtx = arg->solvmtx;
     int           rank    = ctx->rank;
     int           nthread = ctx->global_ctx->world_size;
@@ -518,9 +755,9 @@ solvMatGen_fill_ttsktab_dbg( isched_thread_t *ctx, void *args )
     {
         solvmtx->ttsktab[rank][i] = j;
 
-#if defined(PASTIX_DYNSCHED)
-        solvmtx->tasktab[j].threadid = rank;
-#endif
+        jloc = solvmtx->tasktab[j].cblknum;
+        solvmtx->cblktab[jloc].threadid = rank;
+
         priomax = pastix_imax( solvmtx->tasktab[j].prionum, priomax );
         priomin = pastix_imin( solvmtx->tasktab[j].prionum, priomin );
         j++;
@@ -808,9 +1045,6 @@ solvMatGen_stats_last( SolverMatrix *solvmtx )
  * @param[in] stride
  *          Stride of the cblk.
  *
- * @param[in] nodenbr
- *          Current global column index.
- *
  * @param[in] cblknum
  *          Global cblk index.
  *
@@ -820,56 +1054,36 @@ solvMatGen_stats_last( SolverMatrix *solvmtx )
  *******************************************************************************/
 void
 solvMatGen_init_cblk_recv( const symbol_matrix_t *symbmtx,
+                           const SimuCtrl        *simuctrl,
                                  SolverCblk      *solvcblk,
                                  SolverBlok      *solvblok,
                                  Cand            *candcblk,
                                  pastix_int_t    *cblklocalnum,
                                  pastix_int_t     recvidx,
-                                 pastix_int_t     fcolnum,
-                                 pastix_int_t     lcolnum,
                                  pastix_int_t     brownum,
-                                 pastix_int_t     nodenbr,
                                  pastix_int_t     cblknum,
                                  int              ownerid )
 {
     assert( solvblok != NULL );
-    assert( fcolnum >= 0 );
-    assert( lcolnum >= fcolnum );
-    assert( nodenbr >= 0 );
     assert( brownum >= 0 );
 
     symbol_cblk_t *symbcblk = symbmtx->cblktab + cblknum;
     symbol_blok_t *symbblok = symbmtx->bloktab + symbcblk->bloknum;
 
-    SolverBlok  *fblokptr = solvblok;
-    pastix_int_t fbloknum = symbcblk[0].bloknum;
-    pastix_int_t lbloknum = symbcblk[1].bloknum;
-    pastix_int_t frownum, lrownum ;
-    pastix_int_t lcblknm, fcblknm;
-    pastix_int_t j, stride = 0;
-    pastix_int_t nbrows, nbcols;
-    pastix_int_t tasks2D  = candcblk->cblktype & CBLK_TASKS_2D;
+    pastix_int_t lcblknm;
+    pastix_int_t stride;
+    pastix_int_t layout2D  = candcblk->cblktype & CBLK_LAYOUT_2D;
 
-    nbcols = lcolnum - fcolnum + 1;
-    nbrows = solvMatGen_get_rownum( symbmtx, symbblok, &frownum, &lrownum );
+    assert( symbblok->lcblknm == cblknum );
 
     lcblknm = cblklocalnum[symbblok->lcblknm] - recvidx;
-    /* TODO : Adapt bloks to the received zone */
-    for ( j = fbloknum; j < lbloknum; j++, symbblok++ ) {
-        fcblknm = (j > fbloknum) ? -1 : cblklocalnum[symbblok->fcblknm];
-        nbrows  = solvMatGen_get_rownum( symbmtx, symbblok, &frownum, &lrownum );
+    stride  = solvMatGen_remote_bloks( symbmtx, symbcblk, simuctrl,
+                                       solvcblk, solvblok,
+                                       lcblknm, layout2D, ownerid );
+    solvblok->fcblknm = cblklocalnum[symbblok->fcblknm];
 
-        solvMatGen_init_blok( solvblok,
-                              lcblknm, fcblknm,
-                              frownum, lrownum,
-                              stride, nbcols, tasks2D );
-        solvblok->gbloknm = -1;
-        stride += nbrows;
-        solvblok++;
-    }
-
-    solvMatGen_init_cblk( solvcblk, fblokptr, candcblk, symbcblk,
-                          fcolnum, lcolnum, brownum, stride, nodenbr,
+    solvMatGen_init_cblk( solvcblk, solvblok, candcblk, symbcblk,
+                          solvcblk->fcolnum, solvcblk->lcolnum, brownum, stride,
                           cblknum, ownerid );
 
     solvcblk->brown2d   = brownum;

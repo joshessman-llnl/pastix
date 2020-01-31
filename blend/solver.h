@@ -69,9 +69,6 @@ typedef struct task_s {
     pastix_int_t          cblknum; /**< Attached column block                                     */
     pastix_int_t          bloknum; /**< Attached block                                            */
     pastix_int_t volatile ctrbcnt; /**< Total number of contributions                             */
-#if defined(PASTIX_DYNSCHED)
-    int                   threadid;/**< Index of the bubble which contains the task               */
-#endif
 } Task;
 
 #define GPUID_UNDEFINED -2 /**< GPU still undefined       */
@@ -409,6 +406,9 @@ int           solverDraw      ( const SolverMatrix *solvptr,
                                 int                 verbose,
                                 const char         *directory );
 void          solverPrintStats( const SolverMatrix *solvptr );
+void
+solverCommunicationMatrix( const char *dirtemp,
+                           const SolverMatrix *solvmtx, int solv_seq );
 
 void solverRequestInit( SolverMatrix *solvmtx );
 void solverRequestExit( SolverMatrix *solvmtx );

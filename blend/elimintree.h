@@ -19,17 +19,22 @@
 #ifndef _elimintree_h_
 #define _elimintree_h_
 
+#include "extendVector.h"
+
 /**
  * @brief Node of the elimination tree.
  */
 typedef struct etree_node_s {
-    double       total;   /**< Cost of the treenode only (compute + send)    */
-    double       subtree; /**< Cost of the subtree (includes total)          */
-    double       cripath; /**< Cost of the citical path to the node included */
-    int          ndlevel; /**< Node depth in the elimination tree            */
-    int          sonsnbr; /**< Number of sons                                */
-    pastix_int_t fathnum; /**< index of the father node                      */
-    pastix_int_t fsonnum; /**< index of first son                            */
+    double         ndecost; /**< Cost of the tree node only (compute + send)  */
+    double         ndepath; /**< Critical path of the tree node only          */
+    double         subcost; /**< Cost of the subtree (including node)         */
+    double         subpath; /**< Citical path of the subtree (including node) */
+    pastix_int_t   nmxcand; /**< Node maximum candidates                      */
+    pastix_int_t   smxcand; /**< Subtree maximum candidates                   */
+    int            ndlevel; /**< Node depth in the elimination tree            */
+    pastix_int_t   sonsnbr; /**< Number of sons                               */
+    pastix_int_t   fathnum; /**< index of the father node                     */
+    pastix_int_t   fsonnum; /**< index of first son                           */
 } eTreeNode_t;
 
 /**

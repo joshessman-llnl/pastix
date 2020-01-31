@@ -22,6 +22,7 @@
 #include "common.h"
 #include "symbol.h"
 #include "symbol_cost.h"
+#include "elimintree.h"
 
 /**
  *******************************************************************************
@@ -479,6 +480,213 @@ pastixSymbolGetTimes( const symbol_matrix_t *symbmtx,
 
     assert( ( cblkptr - cblkcost ) == symbmtx->cblknbr );
     assert( ( blokptr - blokcost ) == symbmtx->bloknbr );
+}
+
+static double
+sum2dextflops( const symbol_function_t *fptr,
+               const symbol_matrix_t   *symbmtx,
+                     pastix_int_t       cblknum,
+                     eTreeNode_t       *node,
+                     double            *blokcost )
+{
+    symbol_cblk_t *cblk = symbmtx->cblktab + cblknum;
+    pastix_int_t M, N, K, l;
+    double ops, nbops = 0.;
+    double dof = (double)(symbmtx->dof);
+
+    /*
+     * Size of the factorization kernel (square)
+     */
+    N = (cblk->lcolnum - cblk->fcolnum + 1);
+    N *= dof;
+
+    nbops = fptr->diag( N );
+    node->ndepath = nbops;
+
+    /* Just to put a first metric, this can be changed in the future */
+    node->nmxcand = 1;
+    node->smxcand = 0;
+
+    /*
+     * Height of the TRSM to which apply the TRSM
+     */
+    M = 0;
+    for(l = cblk[0].bloknum+1; l < cblk[1].bloknum; l++)
+    {
+        M += (symbmtx->bloktab[l].lrownum - symbmtx->bloktab[l].frownum + 1);
+    }
+    M *= dof;
+
+    if( M > 0 ) {
+        nbops += fptr->trsm( M, N );
+        //node->smxcand += Mseg;
+    }
+
+    /* Store only critical path in blokcost */
+    *blokcost = 0;
+    blokcost++;
+
+    /*
+     * Compute the cost of each GEMM
+     */
+    K = N;
+
+    if( cblk[0].bloknum+1 < cblk[1].bloknum) {
+        l = cblk[0].bloknum + 1;
+        N = (symbmtx->bloktab[l].lrownum - symbmtx->bloktab[l].frownum + 1);
+        N *= dof;
+        node->ndepath += fptr->trsm( N, K )
+            +            fptr->blkupdate( M, N, K );
+    }
+    for(l = cblk[0].bloknum+1; l < cblk[1].bloknum; l++, blokcost++)
+    {
+        N = (symbmtx->bloktab[l].lrownum - symbmtx->bloktab[l].frownum + 1);
+        N *= dof;
+
+        ops = fptr->blkupdate( M, N, K );
+        *blokcost = ops;
+        nbops    += ops;
+        M -= N;
+    }
+
+    node->ndecost = nbops;
+    return nbops;
+}
+
+void
+pastixSymbolGetFlops2( const symbol_matrix_t *symbmtx,
+                       pastix_coeftype_t      flttype,
+                       pastix_factotype_t     factotype,
+                       EliminTree            *etree,
+                       double                *cblkcost,
+                       double                *blokcost )
+{
+    symbol_function_t *f;
+    double *cblkptr, *blokptr;
+    eTreeNode_t *node = etree->nodetab;
+    pastix_int_t i;
+    int iscomplex = ((flttype == PastixComplex32) || (flttype == PastixComplex64)) ? 1 : 0;
+    f = &(perfstable[iscomplex][factotype]);
+
+    /* Initialize costs */
+    cblkptr = cblkcost;
+    blokptr = blokcost;
+
+    for(i=0; i<symbmtx->cblknbr; i++, cblkptr++, node++) {
+        *cblkptr = sum2dextflops( f, symbmtx, i, node, blokptr );
+
+        blokptr += symbmtx->cblktab[i+1].bloknum
+            -      symbmtx->cblktab[i  ].bloknum;
+    }
+
+    assert( ( cblkptr - cblkcost ) == symbmtx->cblknbr );
+    assert( ( blokptr - blokcost ) == symbmtx->bloknbr );
+}
+
+static inline void
+setMaxDouble( double *value, double newvalue ) {
+    *value = (*value) < newvalue ? newvalue : (*value);
+}
+
+void
+pastixSymbolComputeCost( const symbol_matrix_t *symbmtx,
+                         pastix_coeftype_t      flttype,
+                         pastix_factotype_t     factotype,
+                         EliminTree            *etree,
+                         double                *cblkcost,
+                         double                *blokcost )
+{
+    symbol_function_t *f;
+    symbol_cblk_t     *cblk;
+    symbol_blok_t     *blok;
+    double            *cblkptr, *blokptr;
+    pastix_int_t       i, cblknum;
+    eTreeNode_t       *node = etree->nodetab;
+    int                iscomplex;
+
+    iscomplex = ((flttype == PastixComplex32) || (flttype == PastixComplex64)) ? 1 : 0;
+    f = &(perfstable[iscomplex][factotype]);
+
+    /* Initialize costs */
+    cblkptr = cblkcost;
+    blokptr = blokcost;
+
+    cblk = symbmtx->cblktab;
+    cblknum = 0;
+
+    for(i=0; i<symbmtx->cblknbr; i++, cblk++, cblknum++, node++, cblkptr++) {
+        pastix_int_t   bloknum = cblk->bloknum;
+        pastix_int_t   ld      = 0;
+        pastix_int_t   k       = cblk->lcolnum - cblk->fcolnum + 1;
+        pastix_int_t   m;
+        double trfcost, cripath, trsmcost, nodecost;
+
+        blok = symbmtx->bloktab + bloknum;
+        trfcost = f->diag( k );
+        blok->gemmcost = trfcost;
+        nodecost = trfcost;
+
+        cripath  = blok->cripath + trfcost;
+
+        /* Just to put a first metric, this can be changed in the future */
+        node->nmxcand = 1;
+        node->smxcand = 0;
+
+        trsmcost = 0.;
+
+        /* Move to first extra diagonal block */
+        bloknum++;
+        blok++;
+
+        /* Compute the cost of the TRSM */
+        for(; bloknum < cblk[1].bloknum; blok++, bloknum++) {
+            m = blok->lrownum - blok->frownum + 1;
+            ld += m;
+
+            blok->trsmcost = f->trsm( m, k );
+            trsmcost += blok->trsmcost;
+
+            setMaxDouble( &cripath, blok->cripath );
+        }
+
+        cripath  += trsmcost;
+        nodecost += trsmcost;
+
+        node->ndepath = nodecost; /* TRF + TRSM */
+
+        /* Compute the cost of the GEMM */
+        bloknum = cblk->bloknum;
+        blok    = symbmtx->bloktab + bloknum;
+
+        *blokptr = blok->trsmcost + blok->gemmcost;
+        blok++;
+        blokptr++;
+        bloknum++;
+
+        for(; bloknum < cblk[1].bloknum; blok++, bloknum++, blokptr++) {
+            pastix_int_t fcblknum = blok->fcblknm;
+            pastix_int_t fbloknum = symbmtx->cblktab[fcblknum].bloknum;
+
+            m = blok->lrownum - blok->frownum + 1;
+
+            blok->gemmcost = f->blkupdate( k, ld, m );
+            cripath  += blok->gemmcost;
+            nodecost += blok->gemmcost;
+
+            setMaxDouble( &(symbmtx->bloktab[fbloknum].cripath), cripath );
+
+            *blokptr = blok->trsmcost + blok->gemmcost;
+        }
+
+        bloknum = cblk[0].bloknum + 1;
+        if  ( bloknum < cblk[1].bloknum ) {
+            node->ndepath += symbmtx->bloktab[ bloknum ].gemmcost;
+        }
+
+        node->ndecost = nodecost;
+        assert( node->ndepath <= node->ndecost );
+        *cblkptr = nodecost;
+    }
 }
 
 /**

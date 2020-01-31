@@ -117,7 +117,8 @@
 #define OUT_BLEND_COSTMATRIX_TIME                       \
     "    Cost matrix built in                  %e s\n"
 #define OUT_BLEND_ELIMTREE_TOTAL_COST                   \
-    "    Total estimated cost of the etree     %e s\n"
+    "    Estimated total cost of the etree     %e s\n"  \
+    "    Estimated critical path of the etree  %e s\n"
 #define OUT_BLEND_PROPMAP                       \
     "    Perform proportional mapping\n"
 #define OUT_BLEND_PROPMAP_TIME                          \

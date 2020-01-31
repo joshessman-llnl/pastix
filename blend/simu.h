@@ -127,6 +127,8 @@ typedef struct simuctrl_s {
     SimuFtgt     *ftgttab;      /**< Vector containing the fan in target                       */
     pastix_int_t  ftgtnbr;      /**< The number of fan-in contribution                         */
     SimuTimer    *ftgttimetab;  /**< Vector containing a timer for each cluster on each ftgt   */
+    pastix_int_t steal;         /**< Use steal technique or not in simu_getNextTaskNextProc*/
+    pastix_int_t stealLocal;    /**< Use stealLocal technique or not in simu_getNextTaskNextProc*/
 } SimuCtrl;
 
 

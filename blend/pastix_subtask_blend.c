@@ -274,6 +274,21 @@ pastix_subtask_blend( pastix_data_t *pastix_data )
     {
         ctrl.candtab = candInit( symbmtx->cblknbr );
 
+        pastixSymbolGetFlops2( symbmtx,
+                               iparm[IPARM_FLOAT],
+                               iparm[IPARM_FACTORIZATION],
+                               ctrl.etree,
+                               ctrl.costmtx->cblkcost,
+                               ctrl.costmtx->blokcost );
+
+        /* Comment to use previsou estimation of the critical path and node costs */
+        pastixSymbolComputeCost( symbmtx,
+                                 iparm[IPARM_FLOAT],
+                                 iparm[IPARM_FACTORIZATION],
+                                 ctrl.etree,
+                                 ctrl.costmtx->cblkcost,
+                                 ctrl.costmtx->blokcost );
+
         /* Initialize costs in elimination tree and candtab array for proportionnal mapping */
         candBuild( ctrl.level_tasks2d, ctrl.width_tasks2d,
                    iparm[IPARM_COMPRESS_WHEN], iparm[IPARM_COMPRESS_MIN_WIDTH],
@@ -281,9 +296,11 @@ pastix_subtask_blend( pastix_data_t *pastix_data )
                    ctrl.etree,
                    symbmtx,
                    ctrl.costmtx );
+
         if( verbose > PastixVerboseNo ) {
             pastix_print( procnum, 0, OUT_BLEND_ELIMTREE_TOTAL_COST,
-                          ctrl.etree->nodetab[ eTreeRoot(ctrl.etree) ].subtree );
+                          ctrl.etree->nodetab[ eTreeRoot(ctrl.etree) ].subcost,
+                          ctrl.etree->nodetab[ eTreeRoot(ctrl.etree) ].subpath );
         }
     }
 
@@ -317,13 +334,18 @@ pastix_subtask_blend( pastix_data_t *pastix_data )
         }
     }
 
-#if defined(PASTIX_BLEND_PROPMAP_2STEPS)
     /* Dump the dot of the eTree before split */
     if (( verbose > PastixVerboseYes ) &&
         ( pastix_data->procnum == 0 ) )
     {
         FILE *stream = NULL;
         stream = pastix_fopenw( pastix_data->dir_global, "etree.dot", "w" );
+        if ( stream ) {
+            candGenDot( ctrl.etree, ctrl.candtab, stream );
+            fclose(stream);
+        }
+
+        stream = pastix_fopenw( pastix_data->dir_global, "etree_top.dot", "w" );
         if ( stream ) {
             candGenDotLevel( ctrl.etree, ctrl.candtab, stream, 5);
             fclose(stream);
@@ -336,6 +358,7 @@ pastix_subtask_blend( pastix_data_t *pastix_data )
         }
     }
 
+#if defined(PASTIX_BLEND_PROPMAP_2STEPS)
     /*
      * Split the existing symbol matrix according to the number of candidates
      * and cblk types.
@@ -378,6 +401,12 @@ pastix_subtask_blend( pastix_data_t *pastix_data )
         }
     }
 #endif
+
+    pastixSymbolGetTimes( symbmtx,
+                          iparm[IPARM_FLOAT],
+                          iparm[IPARM_FACTORIZATION],
+                          ctrl.costmtx->cblkcost,
+                          ctrl.costmtx->blokcost );
 
     if(ctrl.count_ops && (ctrl.leader == procnum)) {
         pastixSymbolGetFlops( symbmtx,
@@ -436,6 +465,22 @@ pastix_subtask_blend( pastix_data_t *pastix_data )
         if( verbose > PastixVerboseYes ) {
             pastix_print( procnum, 0, OUT_BLEND_SIMU );
         }
+
+        /*Use or not steal technique*/
+        if (ctrl.allcand==3) {
+            simuctrl->steal = 1;/*use the technique*/
+        } else {
+            simuctrl->steal = 0;
+        }
+        
+        /*Use or not stealLocal technique*/
+        if (ctrl.allcand==4) {
+            simuctrl->steal = 1;
+            simuctrl->stealLocal = 1;/*use the stealLocal technique*/
+        } else {
+            simuctrl->stealLocal = 0;
+        }
+
         clockStart(timer_current);
 
         simuRun( simuctrl, &ctrl, symbmtx );
@@ -496,6 +541,11 @@ pastix_subtask_blend( pastix_data_t *pastix_data )
                 solverPrintStats( solvmtx );
             }
         }
+
+        {
+            pastix_gendirectories( pastix_data );
+            solverCommunicationMatrix( pastix_data->dir_local, solvmtx, 0 );
+        }
     }
 
     /* Free allocated memory */
@@ -535,7 +585,7 @@ pastix_subtask_blend( pastix_data_t *pastix_data )
         if (iparm[IPARM_FACTORIZATION] == PastixFactLU)
         {
             iparm[IPARM_NNZEROS]        *= 2;
-            dparm[DPARM_PRED_FACT_TIME] *= 2.;
+            //dparm[DPARM_PRED_FACT_TIME] *= 2.;
         }
         dparm[DPARM_SOLV_FLOPS] = (double)iparm[IPARM_NNZEROS]; /* number of operations for solve */
 

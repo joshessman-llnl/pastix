@@ -211,7 +211,6 @@ solvMatGen_init_cblk( SolverCblk    *solvcblk,
                       pastix_int_t   lcolnum,
                       pastix_int_t   brownum,
                       pastix_int_t   stride,
-                      pastix_int_t   nodenbr,
                       pastix_int_t   cblknum,
                       int            ownerid )
 {
@@ -219,7 +218,6 @@ solvMatGen_init_cblk( SolverCblk    *solvcblk,
     assert( fcolnum >= 0 );
     assert( lcolnum >= fcolnum );
     assert( stride  >= 0 );
-    assert( nodenbr >= 0 );
     assert( brownum >= 0 );
 
     /* Init the cblk */
@@ -231,8 +229,10 @@ solvMatGen_init_cblk( SolverCblk    *solvcblk,
     solvcblk->lcolnum    = lcolnum;
     solvcblk->fblokptr   = fblokptr;
     solvcblk->stride     = stride;
-    solvcblk->lcolidx    = nodenbr;
+    solvcblk->lcolidx    = fcolnum;
     solvcblk->brownum    = brownum;
+    //solvcblk->brown2d  = brownum;
+    //solvcblk->sndeidx  = cblknum;
     solvcblk->gcblknum   = cblknum;
     solvcblk->bcscnum    = -1;
     solvcblk->selevtx    = (symbcblk->selevtx == SYMBCBLK_PROJ) ? 1 : 0;
@@ -352,15 +352,13 @@ void solvMatGen_fill_localnums( const symbol_matrix_t *symbmtx,
                                 int            **recv_sources_ptr );
 
 void solvMatGen_init_cblk_recv( const symbol_matrix_t *symbmtx,
+                                const SimuCtrl        *simuctrl,
                                       SolverCblk      *solvcblk,
                                       SolverBlok      *solvblok,
                                       Cand            *candcblk,
                                       pastix_int_t    *cblklocalnum,
                                       pastix_int_t     recvidx,
-                                      pastix_int_t     fcolnum,
-                                      pastix_int_t     lcolnum,
                                       pastix_int_t     brownum,
-                                      pastix_int_t     nodenbr,
                                       pastix_int_t     cblknum,
                                       int              ownerid );
 
@@ -385,6 +383,21 @@ void solvMatGen_fill_tasktab( SolverMatrix   *solvmtx,
 
 void solvMatGen_stats_last( SolverMatrix *solvmtx );
 void solvMatGen_max_buffers( SolverMatrix *solvmtx );
+
+pastix_int_t
+solvMatGen_remote_bloknbr( const symbol_matrix_t *symbmtx,
+                           const symbol_cblk_t   *symbcblk,
+                           const SimuCtrl        *simuctrl,
+                                 int              ownerid );
+pastix_int_t
+solvMatGen_remote_bloks( const symbol_matrix_t *symbmtx,
+                         const symbol_cblk_t   *symbcblk,
+                         const SimuCtrl        *simuctrl,
+                               SolverCblk      *solvcblk,
+                               SolverBlok      *solvblok,
+                               pastix_int_t     lcblknum,
+                               pastix_int_t     layout2D,
+                               int              ownerid );
 
 #endif /* _solver_matrix_gen_utils_h_ */
 

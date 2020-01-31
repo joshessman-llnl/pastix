@@ -131,7 +131,7 @@ flops_dgetrf_trsm( pastix_int_t M, pastix_int_t N ) {
  */
 static inline double
 flops_zsytrf_trsm( pastix_int_t M, pastix_int_t N ) {
-    return FLOPS_ZTRSM( PastixRight, M, N ) + 6. * (double)N * (double)M;
+    return FLOPS_ZTRSM( PastixRight, M, N );
 }
 
 /**
@@ -140,7 +140,7 @@ flops_zsytrf_trsm( pastix_int_t M, pastix_int_t N ) {
  */
 static inline double
 flops_dsytrf_trsm( pastix_int_t M, pastix_int_t N ) {
-    return FLOPS_DTRSM( PastixRight, M, N ) + (double)N * (double)M;
+    return FLOPS_DTRSM( PastixRight, M, N );
 }
 
 /**
@@ -188,7 +188,7 @@ flops_dgetrf_update( pastix_int_t K, pastix_int_t M ) {
  */
 static inline double
 flops_zsytrf_update( pastix_int_t K, pastix_int_t M ) {
-    return FLOPS_ZSYRK( K, M ) + 6. * (double)M * (double)M;
+    return FLOPS_ZSYRK( K, M );
 }
 
 /**
@@ -197,7 +197,7 @@ flops_zsytrf_update( pastix_int_t K, pastix_int_t M ) {
  */
 static inline double
 flops_dsytrf_update( pastix_int_t K, pastix_int_t M ) {
-    return FLOPS_DSYRK( K, M ) + (double)M * (double)M;
+    return FLOPS_DSYRK( K, M );
 }
 
 /**
@@ -211,7 +211,7 @@ flops_dsytrf_update( pastix_int_t K, pastix_int_t M ) {
 static inline double
 flops_zpotrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 {
-    return FLOPS_ZGEMM( M, N, K ) + 2. * (double)M * (double)N;
+    return FLOPS_ZGEMM( M, N, K );
 }
 
 /**
@@ -221,7 +221,7 @@ flops_zpotrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 static inline double
 flops_dpotrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 {
-    return FLOPS_DGEMM( M, N, K ) + (double)M * (double)N;
+    return FLOPS_DGEMM( M, N, K );
 }
 
 /**
@@ -231,8 +231,7 @@ flops_dpotrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 static double
 flops_zgetrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 {
-    return FLOPS_ZGEMM( M, N, K ) + FLOPS_ZGEMM( M-N, N, K )
-        + 2. * (double)M * (double)N + 2. * (double)(M-N) * (double)(N); /* Add step */
+    return FLOPS_ZGEMM( M, N, K ) + FLOPS_ZGEMM( M-N, N, K );
 }
 
 /**
@@ -242,8 +241,7 @@ flops_zgetrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 static inline double
 flops_dgetrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 {
-    return FLOPS_DGEMM( M, N, K ) + FLOPS_DGEMM( M-N, N, K )
-        + (double)M * (double)N + (double)(M-N) * (double)(N); /* Add step */
+    return FLOPS_DGEMM( M, N, K ) + FLOPS_DGEMM( M-N, N, K );
 }
 
 /**
@@ -255,12 +253,10 @@ flops_zsytrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 {
     /* If we consider that we stored the D * A^t somewhere */
 #if 0
-    return FLOPS_ZGEMM( M, N, K )
-        + 2. * (double)M * (double)N;
+    return FLOPS_ZGEMM( M, N, K );
 #else
     /* If not, as it is the case in the runtime */
     return FLOPS_ZGEMM( M, N, K )
-        + 2. * (double)M * (double)N   /* Add step   */
         + 6. * (double)M * (double)N;  /* Scale step */
 #endif
 }
@@ -279,7 +275,6 @@ flops_dsytrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 #else
     /* If not, as it is the case in the runtime */
     return FLOPS_DGEMM( M, N, K )
-        + (double)M * (double)N   /* Add step   */
         + (double)M * (double)N;  /* Scale step */
 #endif
 }

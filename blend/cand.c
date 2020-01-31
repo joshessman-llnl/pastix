@@ -26,6 +26,7 @@
 #include "cost.h"
 #include "cand.h"
 #include "solver.h"
+#include <math.h>
 
 /**
  *******************************************************************************
@@ -161,18 +162,36 @@ candSetClusterCand(       Cand         *candtab,
     pastix_int_t i;
     (void)coresnbr;
 
-    assert( candtab[-1].fcandnum == 0 );
-    assert( candtab[-1].lcandnum == coresnbr-1 );
-    candtab[-1].fccandnum = core2clust[ candtab[-1].fcandnum ];
-    candtab[-1].lccandnum = core2clust[ candtab[-1].lcandnum ];
+    assert( candtab[-1].fcandnum == -1 || candtab[-1].fcandnum == 0 );
+    assert( candtab[-1].lcandnum == -1 || candtab[-1].lcandnum == coresnbr-1 );
+
+    candtab[-1].fccandnum = core2clust[ 0 ];
+    candtab[-1].lccandnum = core2clust[ coresnbr-1 ];
 
     for(i=0; i<cblknbr; i++) {
-        assert( candtab[i].fcandnum >= 0 );
-        assert( candtab[i].lcandnum >= 0 );
-        assert( candtab[i].fcandnum < coresnbr );
-        assert( candtab[i].lcandnum < coresnbr );
-        candtab[i].fccandnum = core2clust[ candtab[i].fcandnum ];
-        candtab[i].lccandnum = core2clust[ candtab[i].lcandnum ];
+        if ( candtab[i].fcandnum == -1 ) {
+            const ExtendVectorINT *cands = &(candtab[i].candidates);
+            int j, nbcand = extendint_Size( cands );
+            candtab[i].fccandnum = candtab[-1].lccandnum;
+            candtab[i].lccandnum = candtab[-1].fccandnum;
+            for( j=0; j<nbcand; j++ ) {
+                int coreid = extendint_Read( cands, j );
+                if ( core2clust[coreid] < candtab[i].fccandnum ) {
+                    candtab[i].fccandnum = core2clust[coreid];
+                }
+                if ( core2clust[coreid] > candtab[i].lccandnum ) {
+                    candtab[i].lccandnum = core2clust[coreid];
+                }
+            }
+        }
+        else {
+            assert( candtab[i].fcandnum >= 0 );
+            assert( candtab[i].lcandnum >= 0 );
+            assert( candtab[i].fcandnum < coresnbr );
+            assert( candtab[i].lcandnum < coresnbr );
+            candtab[i].fccandnum = core2clust[ candtab[i].fcandnum ];
+            candtab[i].lccandnum = core2clust[ candtab[i].lcandnum ];
+        }
     }
 }
 
@@ -274,19 +293,27 @@ candSubTreeBuild( pastix_int_t           rootnum,
                   double                *cripath )
 {
     double cost, mycp = 0.0;
-    pastix_int_t i, son;
+    pastix_int_t i, son, sonsnbr, cand;
 
-    /* Get cost of current node */
+    /* Get costs of current node */
     if ( rootnum == -1 ) {
-        cost = 0.;
+        etree->nodetab[ rootnum ].ndecost = 0.;
     }
     else {
-        cost = costmtx->cblkcost[rootnum];
+        etree->nodetab[ rootnum ].ndecost = costmtx->cblkcost[rootnum];
     }
-    etree->nodetab[ rootnum ].total   = cost;
-    etree->nodetab[ rootnum ].subtree = cost;
 
-    for(i=0; i<etree->nodetab[rootnum].sonsnbr; i++)
+    mycp = etree->nodetab[ rootnum ].ndepath;
+    cost = etree->nodetab[ rootnum ].ndecost;
+
+    etree->nodetab[ rootnum ].subpath = mycp;
+    etree->nodetab[ rootnum ].subcost = cost;
+
+    sonsnbr = etree->nodetab[rootnum].sonsnbr;
+    mycp = 0.0;
+    cand = 1;
+
+    for(i=0; i<sonsnbr; i++)
     {
         double soncp = 0.0;
 
@@ -294,38 +321,32 @@ candSubTreeBuild( pastix_int_t           rootnum,
         candtab[ son ].treelevel = candtab[ rootnum ].treelevel - 1;
         candtab[ son ].costlevel = candtab[ rootnum ].costlevel - cost;
 
-        etree->nodetab[ rootnum ].subtree +=
+        etree->nodetab[ rootnum ].subcost +=
             candSubTreeBuild( son, candtab, etree, symbmtx, costmtx, &soncp );
 
         mycp = (mycp > soncp) ? mycp : soncp;
+        cand += etree->nodetab[son].smxcand;
     }
 
-    /* Update local critical path */
-    if (rootnum >= 0)
-    {
-        pastix_int_t bloknum = symbmtx->cblktab[ rootnum ].bloknum;
-        pastix_int_t fcblknm;
+    etree->nodetab[ rootnum ].nmxcand = 1;
+    /*pastix_imax( etree->nodetab[ rootnum ].nmxcand,
+     ceil( etree->nodetab[ rootnum ].ndecost /
+     etree->nodetab[ rootnum ].ndepath ) );*/
 
-        /* Add Facto and solve */
-        mycp += costmtx->blokcost[ bloknum ];
+    etree->nodetab[ rootnum ].subpath += mycp;
+    etree->nodetab[ rootnum ].smxcand = pastix_imax( cand, etree->nodetab[ rootnum ].nmxcand );
+    etree->nodetab[ rootnum ].smxcand = pastix_imin( etree->nodetab[ rootnum ].smxcand,
+                                                     ceil( etree->nodetab[ rootnum ].subcost /
+                                                           etree->nodetab[ rootnum ].subpath ) );
 
-        /* Add first GEMM */
-        bloknum++;
-        if (bloknum <  symbmtx->cblktab[ rootnum+1 ].bloknum) {
-            fcblknm = symbmtx->bloktab[ bloknum ].fcblknm;
+    *cripath = etree->nodetab[ rootnum ].subpath;
 
-            while( (bloknum <  symbmtx->cblktab[ rootnum+1 ].bloknum) &&
-                   (fcblknm == symbmtx->bloktab[ bloknum   ].fcblknm) )
-            {
-                mycp += costmtx->blokcost[ bloknum ];
-                bloknum++;
-            }
-        }
-    }
-    etree->nodetab[ rootnum ].cripath = mycp;
-    *cripath = mycp;
+    assert( etree->nodetab[ rootnum ].subpath <= etree->nodetab[ rootnum ].subcost );
+    assert( etree->nodetab[ rootnum ].ndepath <= etree->nodetab[ rootnum ].ndecost );
+    assert( etree->nodetab[ rootnum ].subpath >= etree->nodetab[ rootnum ].ndepath );
+    assert( etree->nodetab[ rootnum ].subcost >= etree->nodetab[ rootnum ].ndecost );
 
-    return etree->nodetab[ rootnum ].subtree;
+    return etree->nodetab[ rootnum ].subcost;
 }
 
 /**

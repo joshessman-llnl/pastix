@@ -173,161 +173,183 @@ solverMatrixGen( SolverMatrix          *solvmtx,
             pastix_int_t fbloknum = symbcblk[0].bloknum;
             pastix_int_t lbloknum = symbcblk[1].bloknum;
             pastix_int_t stride   = 0;
-            pastix_int_t fcolnum, lcolnum, nbcols;
+            pastix_int_t layout2D = candcblk->cblktype & CBLK_LAYOUT_2D;
             pastix_int_t tasks2D  = candcblk->cblktype & CBLK_TASKS_2D;
+            pastix_int_t fcolnum, lcolnum, nbcols, saved_nbcols;
 
             nbcols = solvMatGen_get_colnum( symbmtx, symbcblk, &fcolnum, &lcolnum );
+            saved_nbcols = nbcols;
 
+            /* Init all the recv cblks and remote bloks*/
             recvcnt = pcbklocalnum[i];
             for( k = 0; k < recvcnt; k++ )
             {
                 fblokptr = solvblok;
-                solvMatGen_init_cblk_recv( symbmtx, solvcblk, solvblok, candcblk,
-                                           cblklocalnum, pcbklocalnum[i],
-                                           fcolnum, lcolnum, brownum, nodenbr, i,
+                solvMatGen_init_cblk_recv( symbmtx, simuctrl, solvcblk, solvblok, candcblk,
+                                           cblklocalnum, pcbklocalnum[i], brownum, i,
                                            recv_sources[solvmtx->recvcnt] );
 
                 pastix_int_t cblksize = cblk_colnbr(solvcblk) * solvcblk->stride;
-                solvmtx->maxrecv = pastix_imax( solvmtx->maxrecv, cblksize );
+                solvmtx->maxrecv      = pastix_imax( solvmtx->maxrecv, cblksize );
+                solvblok += solvMatGen_remote_bloknbr( symbmtx, symbcblk, simuctrl,
+                                                       recv_sources[solvmtx->recvcnt] );
+                solvMatGen_cblkIs2D( solvmtx, &nbcblk2d, &nbblok2d,
+                                     (solvblok - fblokptr), tasks2D, cblknum );
                 pcbklocalnum[i]--;
                 solvmtx->recvcnt++;
                 cblknum++;
                 solvcblk++;
-                solvblok += (symbcblk[1].bloknum - symbcblk[0].bloknum);
             }
 
             flaglocal = 0;
             fblokptr  = solvblok;
-            for ( j = fbloknum; j < lbloknum; j++, symbblok++, simublok++ ) {
-                pastix_int_t frownum, lrownum, nbrows;
+            /* Init all the remote bloks of a fanin cblks */
+            if( fcbklocalnum[i] != -1 ) {
+                pastix_int_t nbblok = symbcblk[1].bloknum - symbcblk[0].bloknum;
+                flaglocal = 1;
+                stride = solvMatGen_remote_bloks( symbmtx, symbcblk, simuctrl,
+                                                  solvcblk, solvblok,
+                                                  cblklocalnum[i],
+                                                  layout2D,
+                                                  ctrl->clustnum );
+                solvblok +=  solvMatGen_remote_bloknbr( symbmtx, symbcblk, simuctrl, ctrl->clustnum );
+                symbblok +=  nbblok;
+                gbloknm  +=  nbblok;
+                simublok +=  nbblok;
+                fcolnum   =  solvcblk->fcolnum;
+                lcolnum   =  solvcblk->lcolnum;
+                nbcols    = (solvcblk->lcolnum - solvcblk->fcolnum + 1);
+            }
+            else {
+                for ( j = fbloknum; j < lbloknum; j++, symbblok++, simublok++ ) {
+                    pastix_int_t frownum, lrownum, nbrows;
 
-                nbrows = solvMatGen_get_rownum( symbmtx, symbblok, &frownum, &lrownum );
+                    nbrows = solvMatGen_get_rownum( symbmtx, symbblok, &frownum, &lrownum );
 
-                /* Save max block size */
-                blokamax = pastix_imax( blokamax, nbrows * nbcols );
+                    /* Save max block size */
+                    blokamax = pastix_imax( blokamax, nbrows * nbcols );
 
-                if ( ( simublok->ownerclust == ctrl->clustnum ) || ( fcbklocalnum[i] != -1 ) ) {
-                    pastix_int_t fcblknm = ( simublok->ownerclust == ctrl->clustnum ) ? cblklocalnum[symbblok->fcblknm] : -1;
-                    flaglocal = 1;
+                    if ( simublok->ownerclust == ctrl->clustnum  ) {
+                        flaglocal = 1;
 
-                    /* Init the blok */
-                    solvMatGen_init_blok( solvblok,
-                                          cblklocalnum[symbblok->lcblknm], fcblknm,
-                                          frownum, lrownum, stride, nbcols,
-                                          candcblk->cblktype & CBLK_LAYOUT_2D );
-                    solvblok->gbloknm = gbloknm;
-                    stride += nbrows;
-                    solvblok++;
+                        /* Init the blok */
+                        solvMatGen_init_blok( solvblok,
+                                              cblklocalnum[symbblok->lcblknm],
+                                              cblklocalnum[symbblok->fcblknm],
+                                              frownum, lrownum, stride, nbcols,
+                                              layout2D );
+                        solvblok->gbloknm = gbloknm;
+                        stride += nbrows;
+                        solvblok++;
+                    }
+                    gbloknm++;
                 }
-                gbloknm++;
             }
 
-            if ( flaglocal ) {
-                pastix_int_t brownbr;
-                solvmtx->colmax = pastix_imax( solvmtx->colmax, nbcols );
+            if ( !flaglocal ) {
+                /* Extra statistic informations, need to be done everywhere */
+                nodenbr += saved_nbcols;
+                coefnbr += stride * nbcols;
+                continue;
+            }
 
-                /* Update the 1D/2D infos of the solvmtx through the CBLK_RECV. */
-                for( k = 1; k <= recvcnt; k++ )
-                {
-                    solvMatGen_cblkIs2D( solvmtx, &nbcblk2d, &nbblok2d,
-                                        (solvblok - fblokptr), tasks2D, cblknum - k );
-                }
+            pastix_int_t brownbr;
+            solvmtx->colmax = pastix_imax( solvmtx->colmax, nbcols );
 
-                /* Update the 1D/2D infos of the solvmtx through a cblk. */
-                solvMatGen_cblkIs2D( solvmtx, &nbcblk2d, &nbblok2d,
-                                    (solvblok - fblokptr), tasks2D, cblknum );
+            /* Update the 1D/2D infos of the solvmtx through a cblk. */
+            solvMatGen_cblkIs2D( solvmtx, &nbcblk2d, &nbblok2d,
+                                (solvblok - fblokptr), tasks2D, cblknum );
 
-                /* Init the cblk */
-                solvMatGen_init_cblk( solvcblk, fblokptr, candcblk, symbcblk,
-                                      fcolnum, lcolnum, brownum, stride, nodenbr, i, ctrl->clustnum);
+            /* Init the cblk */
+            solvMatGen_init_cblk( solvcblk, fblokptr, candcblk, symbcblk,
+                                  fcolnum, lcolnum, brownum, stride, i, ctrl->clustnum);
 
 #if defined(PASTIX_WITH_MPI)
-                if ( solvmtx->clustnbr > 1 )
-                {
-                    /* No low-rank compression in distributed for the moment */
-                    if( solvcblk->cblktype & CBLK_COMPRESSED ) {
-                        static int warning_compressed = 1;
-                        if ( warning_compressed && (solvmtx->clustnum == 0) ) {
-                            fprintf( stderr,
-                                     "Warning: Low-rank compression is not yet available with multiple MPI processes\n"
-                                     "         It is thus disabled and the factorization will be performed in full-rank\n" );
-                            warning_compressed = 0;
-                        }
-                        solvcblk->cblktype &= (~CBLK_COMPRESSED);
+            if ( solvmtx->clustnbr > 1 )
+            {
+                /* No low-rank compression in distributed for the moment */
+                if( solvcblk->cblktype & CBLK_COMPRESSED ) {
+                    static int warning_compressed = 1;
+                    if ( warning_compressed && (solvmtx->clustnum == 0) ) {
+                        fprintf( stderr,
+                                 "Warning: Low-rank compression is not yet available with multiple MPI processes\n"
+                                 "         It is thus disabled and the factorization will be performed in full-rank\n" );
+                        warning_compressed = 0;
                     }
-
-                    /* No Schur complement in distributed for the moment */
-                    if( solvcblk->cblktype & CBLK_IN_SCHUR ) {
-                        static int warning_schur = 1;
-                        if ( warning_schur && (solvmtx->clustnum == 0) ) {
-                            fprintf( stderr,
-                                     "Warning: Schur complement support is not yet available with multiple MPI processes\n"
-                                     "         It is thus disabled and the factorization will be fully performed\n" );
-                            warning_schur = 0;
-                        }
-                        solvcblk->cblktype &= (~CBLK_IN_SCHUR);
-                    }
+                    solvcblk->cblktype &= (~CBLK_COMPRESSED);
                 }
+
+                /* No Schur complement in distributed for the moment */
+                if( solvcblk->cblktype & CBLK_IN_SCHUR ) {
+                    static int warning_schur = 1;
+                    if ( warning_schur && (solvmtx->clustnum == 0) ) {
+                        fprintf( stderr,
+                                 "Warning: Schur complement support is not yet available with multiple MPI processes\n"
+                                 "         It is thus disabled and the factorization will be fully performed\n" );
+                        warning_schur = 0;
+                    }
+                    solvcblk->cblktype &= (~CBLK_IN_SCHUR);
+                }
+            }
 #endif
 
-                /* Store first local cblk in Schur */
-                if ( (cblknum < solvmtx->cblkschur) &&
-                     (solvcblk->cblktype & CBLK_IN_SCHUR) )
-                {
-                    solvmtx->cblkschur = cblknum;
-                }
-
-                solvmtx->gcbl2loc[i] = solvcblk - solvmtx->cblktab;
-
-                /* If the cblk is a fanin one */
-                if ( fcbklocalnum[i] != -1 ) {
-                    solvcblk->cblktype |= CBLK_FANIN;
-                    solvcblk->ownerid   = fcbklocalnum[i];
-                    solvmtx->fanincnt++;
-                }
-                else {
-                    solvcblk->bcscnum = bcscidx;
-                    bcscidx++;
-                }
-
-                /* Compute the original supernode in the nested dissection */
-                sndeidx = solvMatGen_supernode_index( solvcblk, sndeidx, ordeptr );
-
-                /*
-                 * Copy browtab information
-                 * In case of 2D tasks, we reorder the browtab to first store
-                 * the 1D contributions, and then the 2D updates.
-                 * This might also be used for low rank compression, to first
-                 * accumulate small dense contributions, and then, switch to a
-                 * low rank - low rank update scheme.
-                 */
-                brownbr = solvMatGen_reorder_browtab( symbmtx, symbcblk, solvmtx, solvcblk,
-                                                      browtmp, cblklocalnum, bloklocalnum, brownum );
-
-                /* Diagonal bloks of CBLK_RECV are added here in the browtab */
-                while( recvcnt ) {
-                    fblokptr = solvcblk[-recvcnt].fblokptr;
-                    solvmtx->browtab[brownum + brownbr] = fblokptr - solvmtx->bloktab;
-                    fblokptr->browind = brownum + brownbr;
-                    brownbr++;
-
-                    /* Supernode index is copied in too */
-                    solvcblk[-recvcnt].sndeidx = solvcblk->sndeidx;
-                    recvcnt--;
-                }
-
-                brownum += brownbr;
-
-                assert( brownum <= solvmtx->brownbr );
-                assert( solvcblk->brown2d >= solvcblk->brownum );
-                assert( solvcblk->brown2d <= solvcblk->brownum + brownbr );
-
-                cblknum++;
-                solvcblk++;
+            /* Store first local cblk in Schur */
+            if ( (cblknum < solvmtx->cblkschur) &&
+                    (solvcblk->cblktype & CBLK_IN_SCHUR) )
+            {
+                solvmtx->cblkschur = cblknum;
             }
 
+            solvmtx->gcbl2loc[i] = solvcblk - solvmtx->cblktab;
+
+            /* If the cblk is a fanin one */
+            if ( fcbklocalnum[i] != -1 ) {
+                solvcblk->cblktype |= CBLK_FANIN;
+                solvcblk->ownerid   = fcbklocalnum[i];
+                solvmtx->fanincnt++;
+            }
+            else {
+                solvcblk->bcscnum = bcscidx;
+                bcscidx++;
+            }
+
+            /* Compute the original supernode in the nested dissection */
+            sndeidx = solvMatGen_supernode_index( solvcblk, sndeidx, ordeptr );
+
+            /*
+                * Copy browtab information
+                * In case of 2D tasks, we reorder the browtab to first store
+                * the 1D contributions, and then the 2D updates.
+                * This might also be used for low rank compression, to first
+                * accumulate small dense contributions, and then, switch to a
+                * low rank - low rank update scheme.
+                */
+            brownbr = solvMatGen_reorder_browtab( symbmtx, symbcblk, solvmtx, solvcblk,
+                                                    browtmp, cblklocalnum, bloklocalnum, brownum );
+
+            /* Diagonal bloks of CBLK_RECV are added in the end of the browtab */
+            while( recvcnt ) {
+                fblokptr = solvcblk[-recvcnt].fblokptr;
+                solvmtx->browtab[brownum + brownbr] = fblokptr - solvmtx->bloktab;
+                fblokptr->browind = brownum + brownbr;
+                brownbr++;
+
+                /* Supernode index is copied in too */
+                solvcblk[-recvcnt].sndeidx = solvcblk->sndeidx;
+                recvcnt--;
+            }
+
+            brownum += brownbr;
+
+            assert( brownum <= solvmtx->brownbr );
+            assert( solvcblk->brown2d >= solvcblk->brownum );
+            assert( solvcblk->brown2d <= solvcblk->brownum + brownbr );
+
+            cblknum++;
+            solvcblk++;
+
             /* Extra statistic informations, need to be done everywhere */
-            nodenbr += nbcols;
+            nodenbr += saved_nbcols;
             coefnbr += stride * nbcols;
         }
 
@@ -335,7 +357,7 @@ solverMatrixGen( SolverMatrix          *solvmtx,
         if ( cblknum > 0 ) {
             solvMatGen_init_cblk( solvcblk, solvblok, candcblk, symbcblk,
                                   solvcblk[-1].lcolnum + 1, solvcblk[-1].lcolnum + 1,
-                                  brownum, 0, nodenbr, -1, solvmtx->clustnum );
+                                  brownum, 0, -1, solvmtx->clustnum );
         }
 
         /*  Add a virtual blok to avoid side effect in the loops on cblk bloks */
@@ -498,8 +520,9 @@ solverMatrixGenSeq( SolverMatrix          *solvmtx,
             pastix_int_t fbloknum = symbcblk[0].bloknum;
             pastix_int_t lbloknum = symbcblk[1].bloknum;
             pastix_int_t stride   = 0;
-            pastix_int_t fcolnum, lcolnum, nbcols;
             pastix_int_t tasks2D  = candcblk->cblktype & CBLK_TASKS_2D;
+            pastix_int_t layout2D = candcblk->cblktype & CBLK_LAYOUT_2D;
+            pastix_int_t fcolnum, lcolnum, nbcols;
             pastix_int_t brownbr;
 
             nbcols = solvMatGen_get_colnum( symbmtx, symbcblk, &fcolnum, &lcolnum );
@@ -516,7 +539,7 @@ solverMatrixGenSeq( SolverMatrix          *solvmtx,
                 solvMatGen_init_blok( solvblok,
                                       symbblok->lcblknm, symbblok->fcblknm,
                                       frownum, lrownum, stride, nbcols,
-                                      candcblk->cblktype & CBLK_LAYOUT_2D );
+                                      layout2D );
                 stride += nbrows;
                 solvblok++;
             }
@@ -526,8 +549,9 @@ solverMatrixGenSeq( SolverMatrix          *solvmtx,
 
             /* Init the cblk */
             solvMatGen_init_cblk( solvcblk, fblokptr, candcblk, symbcblk,
-                                  fcolnum, lcolnum, brownum, stride, nodenbr, i, ctrl->clustnum );
+                                  fcolnum, lcolnum, brownum, stride, i, ctrl->clustnum );
             solvcblk->bcscnum = i;
+
 #if defined(PASTIX_WITH_MPI)
             /* No low-rank compression in distributed for the moment */
             if ( (solvmtx->clustnbr > 1) && (solvcblk->cblktype & CBLK_COMPRESSED) )
@@ -586,7 +610,7 @@ solverMatrixGenSeq( SolverMatrix          *solvmtx,
         if ( cblknum > 0 ) {
             solvMatGen_init_cblk( solvcblk, solvblok, candcblk, symbcblk,
                                   solvcblk[-1].lcolnum + 1, solvcblk[-1].lcolnum + 1,
-                                  symbcblk->brownum, 0, nodenbr, -1, ctrl->clustnum);
+                                  symbcblk->brownum, 0, -1, ctrl->clustnum);
         }
 
         /*  Add a virtual blok to avoid side effect in the loops on cblk bloks */

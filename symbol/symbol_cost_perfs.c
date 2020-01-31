@@ -178,7 +178,7 @@ perfs_dsytrf_trsm( pastix_int_t M, pastix_int_t N ) {
 static inline double
 perfs_zpotrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 {
-    double total = PERF_GEMM( M, N, K ) + PERF_GEAM( M, N );
+    double total = PERF_GEMM( M, N, K );
     assert( (M > 0) && (N > 0) && (K > 0) );
     return (total > 0.) ? total : 0.;
 }
@@ -190,7 +190,7 @@ perfs_zpotrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 static inline double
 perfs_dpotrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 {
-    double total = PERF_GEMM( M, N, K ) + PERF_GEAM( M, N );
+    double total = PERF_GEMM( M, N, K );
     assert( (M > 0) && (N > 0) && (K > 0) );
     return (total > 0.) ? total : 0.;
 }
@@ -202,8 +202,8 @@ perfs_dpotrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 static inline double
 perfs_zgetrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 {
-    double total = PERF_GEMM(     M, N, K ) + PERF_GEAM(     M, N )
-        +          PERF_GEMM( (M-N), N, K ) + PERF_GEAM( (M-N), N );
+    double total = PERF_GEMM(     M, N, K )
+        +          PERF_GEMM( (M-N), N, K );
     assert( (M > 0) && (N > 0) && (K > 0) );
     return (total > 0.) ? total : 0.;
 }
@@ -215,8 +215,8 @@ perfs_zgetrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 static inline double
 perfs_dgetrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 {
-    double total = PERF_GEMM(     M, N, K ) + PERF_GEAM(     M, N )
-        +          PERF_GEMM( (M-N), N, K ) + PERF_GEAM( (M-N), N );
+    double total = PERF_GEMM(     M, N, K )
+        +          PERF_GEMM( (M-N), N, K );
     assert( (M > 0) && (N > 0) && (K > 0) );
     return (total > 0.) ? total : 0.;
 }
@@ -228,7 +228,7 @@ perfs_dgetrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 static inline double
 perfs_zsytrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 {
-    double total = PERF_GEMM( M, N, K ) + PERF_GEAM( M, N );
+    double total = PERF_GEMM( M, N, K );
     assert( (M > 0) && (N > 0) && (K > 0) );
     return (total > 0.) ? total : 0.;
 }
@@ -240,7 +240,7 @@ perfs_zsytrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 static inline double
 perfs_dsytrf_blkupdate( pastix_int_t M, pastix_int_t N, pastix_int_t K )
 {
-    double total = PERF_GEMM( M, N, K ) + PERF_GEAM( M, N );
+    double total = PERF_GEMM( M, N, K );
     assert( (M > 0) && (N > 0) && (K > 0) );
     return (total > 0.) ? total : 0.;
 }

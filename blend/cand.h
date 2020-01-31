@@ -33,6 +33,7 @@ typedef struct cand_s {
     pastix_int_t lccandnum; /**< last cluster number of the cluster candidate group  */
     pastix_int_t cluster;   /**< Cluster id on which the task will be executed       */
     int8_t       cblktype;  /**< type of the distribution                            */
+    ExtendVectorINT candidates;
 } Cand;
 
 Cand *candInit (       pastix_int_t     cblknbr );

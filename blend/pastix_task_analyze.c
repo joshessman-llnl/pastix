@@ -72,10 +72,15 @@ pastix_task_analyze( pastix_data_t    *pastix_data,
     /*
      * Ordering step
      */
+    
+    // Graph partitioning needs baseval 1 (Fortran-style)
+    spmBase(spm, 1);
     rc = pastix_subtask_order( pastix_data, spm, NULL );
     if (rc != PASTIX_SUCCESS) {
         return rc;
     }
+    // Reset to zero for later
+    spmBase(spm, 0);
 
     /*
      * Symbolic factorization step

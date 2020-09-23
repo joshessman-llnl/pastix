@@ -29,6 +29,261 @@
 #include "cscd_utils_intern.h"
 #endif /* defined(PASTIX_DISTRIBUTED) */
 
+#define searchInList(n, list, list_size, index){  \
+    pastix_int_t min = 0;                                  \
+    pastix_int_t max = list_size-1;                        \
+    if  (list_size == 0) {                        \
+      index = -1;                                 \
+    }                                             \
+    else {                                        \
+      while (1) {                                 \
+        pastix_int_t cursor = (max +min)/2;                \
+        if ((list)[cursor] == n)                  \
+          {                                       \
+            index = cursor;                       \
+            break;                                \
+          }                                       \
+        else {                                    \
+          if (max <= min) {                       \
+            index = -1;                           \
+            break;                                \
+          }                                       \
+          if ((list)[cursor] > n)                 \
+            {                                     \
+              max = cursor-1;                     \
+            }                                     \
+          else {                                  \
+            if ((list)[cursor] < n)               \
+              {                                   \
+                min = cursor+1;                   \
+              }                                   \
+          }                                       \
+        }                                         \
+      }                                           \
+    }                                             \
+  }
+
+/*
+ *   Function: cscd2csc_int
+ *
+ *   Transform a cscd to a csc.
+ *   colptr2, row2, avals2, rhs2, perm2, invp2 are allocated here.
+ *
+ *   Parameters:
+ *     lN          - number of local column.
+ *     lcolptr     - starting index of each local column in row and avals.
+ *     lrow        _ row number of each local element.
+ *     lavals      - values of each local element.
+ *     lrhs        - local part of the right hand side.
+ *     lperm       - local part of the permutation tabular.
+ *     linvp       - Means nothing, to suppress.
+ *     gN          - global number of columns (output).
+ *     gcolptr     - starting index of each column in row2 and avals2 (output).
+ *     grow        - row number of each element (output).
+ *     gavals      - values of each element (output).
+ *     grhs        - global right hand side (output).
+ *     gperm       - global permutation tabular (output).
+ *     ginvp       - global reverse permutation tabular (output).
+ *     loc2glob    - global number of each local column.
+ *     pastix_comm - PaStiX MPI communicator.
+ *     intern_flag - Decide if malloc will use internal or external macros.
+ *
+ */
+void  cscd2csc_int(pastix_int_t  lN, pastix_int_t *  lcolptr, pastix_int_t * lrow, double * lavals,
+                   double * lrhs, pastix_int_t * lperm, pastix_int_t * linvp,
+                   pastix_int_t *gN, pastix_int_t ** gcolptr, pastix_int_t **grow, double **gavals,
+                   double **grhs, pastix_int_t **gperm, pastix_int_t **ginvp,
+                   pastix_int_t *loc2glob, PASTIX_Comm pastix_comm, pastix_int_t ndof, int intern_flag)
+{
+  pastix_int_t      i,j;
+  int      rank;
+  int      commSize;
+  pastix_int_t      index;
+  pastix_int_t    * AllLocalN   = NULL;
+  pastix_int_t   ** AllColptr   = NULL;
+  pastix_int_t   ** AllRow      = NULL;
+  pastix_int_t   ** AllLoc2glob = NULL;
+  double ** AllAvals    = NULL;
+  double ** AllRhs      = NULL;
+  pastix_int_t   ** AllPerm     = NULL;
+  /*   pastix_int_t   ** AllInvp; */
+  int      proc;
+  (void)pastix_comm; (void)linvp;
+
+  MPI_Comm_rank(pastix_comm,&rank);
+  MPI_Comm_size(pastix_comm,&commSize);
+
+  MALLOC_INTERN(AllLocalN,   commSize, pastix_int_t );
+  MALLOC_INTERN(AllColptr,   commSize, pastix_int_t*);
+  MALLOC_INTERN(AllRow,      commSize, pastix_int_t*);
+  MALLOC_INTERN(AllLoc2glob, commSize, pastix_int_t*);
+
+  if (gavals != NULL)
+    MALLOC_INTERN(AllAvals, commSize, double*);
+
+  if (grhs != NULL)
+    MALLOC_INTERN(AllRhs, commSize, double*);
+
+  if (gperm != NULL)
+    MALLOC_INTERN(AllPerm, commSize, pastix_int_t*);
+
+  for (i = 0; i < commSize; i++)
+    {
+      if (i == rank)
+        {
+          AllLocalN[i]   = lN;
+          AllColptr[i]   = lcolptr;
+          AllRow[i]      = lrow;
+          if (gavals != NULL)
+            AllAvals[i]    = lavals;
+          if (grhs != NULL)
+            AllRhs[i]      = lrhs;
+          if (gperm != NULL)
+            AllPerm[i]     = lperm;
+          AllLoc2glob[i] = loc2glob;
+        }
+
+      MPI_Bcast(&AllLocalN[i] , 1, PASTIX_MPI_INT, i, pastix_comm);
+      if (rank != i)
+        {
+          MALLOC_INTERN(AllColptr[i],   AllLocalN[i]+1, pastix_int_t);
+          MALLOC_INTERN(AllLoc2glob[i], AllLocalN[i],   pastix_int_t);
+          if (grhs != NULL)
+            MALLOC_INTERN(AllRhs[i], ndof*AllLocalN[i], double);
+
+          if (gperm != NULL)
+            MALLOC_INTERN(AllPerm[i], AllLocalN[i], pastix_int_t);
+        }
+
+      MPI_Bcast(AllColptr[i], AllLocalN[i]+1, PASTIX_MPI_INT  , i, pastix_comm);
+      if (rank != i)
+        {
+          MALLOC_INTERN(AllRow[i], AllColptr[i][AllLocalN[i]]-1, pastix_int_t);
+          if (gavals != NULL)
+            MALLOC_INTERN(AllAvals[i], ndof*ndof*(AllColptr[i][AllLocalN[i]]-1), double);
+        }
+
+      MPI_Bcast(AllRow[i], AllColptr[i][AllLocalN[i]]-1,
+                PASTIX_MPI_INT, i, pastix_comm);
+      MPI_Bcast(AllLoc2glob[i], AllLocalN[i], PASTIX_MPI_INT, i, pastix_comm);
+      if (gperm != NULL) {
+        MPI_Bcast(AllPerm[i], AllLocalN[i], PASTIX_MPI_DOUBLE, i, pastix_comm);
+      }
+
+      if (grhs != NULL) {
+        MPI_Bcast(AllRhs[i], ndof*AllLocalN[i], PASTIX_MPI_DOUBLE, i, pastix_comm);
+      }
+      if (gavals != NULL) {
+        MPI_Bcast(AllAvals[i], ndof*ndof*(AllColptr[i][AllLocalN[i]]-1),
+                  PASTIX_MPI_DOUBLE, i, pastix_comm);
+      }
+    }
+
+
+  *gN = 0;
+  for (i = 0; i < commSize; i++)
+    {
+      *gN += AllLocalN[i];
+    }
+
+  MALLOC_INTOREXTERN(*gcolptr, ((*gN)+1), pastix_int_t, intern_flag);
+  /* Fill in gcolptr */
+  (*gcolptr)[0] = 1;
+  for (i = 0; i < (*gN); i++)
+    {
+      for (proc = 0; proc < commSize; proc++)
+        {
+            // Check for baseval 0
+            if (AllLoc2glob[0][0] == 0) {
+                for (j = 0; j < AllLocalN[proc]; j++)
+                {
+                    AllLoc2glob[proc][j] += 1;
+                }
+            }
+          searchInList(i+1, AllLoc2glob[proc], AllLocalN[proc], index);
+          if ( index >= 0 )
+            {
+              (*gcolptr)[i+1] = (*gcolptr)[i] +
+                AllColptr[proc][index+1] -
+                AllColptr[proc][index];
+              break;
+            }
+
+        }
+    }
+  MALLOC_INTOREXTERN(*grow, (*gcolptr)[(*gN)]-1, pastix_int_t, intern_flag);
+  if (gavals != NULL)
+    MALLOC_INTOREXTERN(*gavals, ndof*ndof*((*gcolptr)[(*gN)]-1), double, intern_flag);
+  if (grhs != NULL)
+    MALLOC_INTOREXTERN(*grhs, *gN*ndof, double, intern_flag);
+  if (gperm != NULL)
+    {
+      MALLOC_INTOREXTERN(*gperm, *gN, pastix_int_t, intern_flag);
+      MALLOC_INTOREXTERN(*ginvp, *gN, pastix_int_t, intern_flag);
+    }
+
+  /* Fill-in grow, gavals, grhs, gperm and ginvp*/
+  for (proc = 0; proc < commSize; proc++)
+    {
+      for (i = 0; i < AllLocalN[proc]; i++)
+        {
+          memcpy(&(*grow)[(*gcolptr)[AllLoc2glob[proc][i]-1]-1],
+                 &AllRow[proc][AllColptr[proc][i]-1],
+                 (AllColptr[proc][i+1] - AllColptr[proc][i])*sizeof(pastix_int_t));
+          if (gavals != NULL)
+            memcpy(&(*gavals)[(*gcolptr)[AllLoc2glob[proc][i]-1]-1],
+                   &AllAvals[proc][AllColptr[proc][i]-1],
+                   ndof*ndof*(AllColptr[proc][i+1] - AllColptr[proc][i])*sizeof(double));
+          if (grhs != NULL)
+            for (j = 0; j < ndof; j++)
+              (*grhs)[ndof*(AllLoc2glob[proc][i]-1)+j]  = AllRhs[proc][ndof*i+j];
+          if (gperm != NULL)
+            {
+              (*gperm)[AllLoc2glob[proc][i]-1] = AllPerm[proc][i];
+              /* (*ginvp)[AllLoc2glob[proc][i]-1] = AllInvp[proc][i]; */
+
+            }
+        }
+    }
+  if (gperm != NULL)
+    {
+      for (i = 0; i < *gN; i++)
+        (*ginvp)[(*gperm)[i]] = i;
+    }
+  for (i = 0; i < commSize; i++)
+    {
+      if (rank != i)
+        {
+          memFree_null(AllColptr[i]);
+          memFree_null(AllRow[i]);
+          if (gavals != NULL)
+            memFree_null(AllAvals[i]);
+          if (grhs != NULL)
+            memFree_null(AllRhs[i]);
+          memFree_null(AllLoc2glob[i]);
+          if (gperm != NULL)
+            {
+              memFree_null(AllPerm[i]);
+              /*            memFree_null(AllInvp[i]); */
+            }
+        }
+    }
+  memFree_null(AllLocalN);
+  memFree_null(AllColptr);
+  memFree_null(AllRow);
+  if (gavals != NULL)
+    memFree_null(AllAvals);
+  if (grhs != NULL)
+    memFree_null(AllRhs);
+  memFree_null(AllLoc2glob);
+  if (gperm != NULL)
+    {
+      memFree_null(AllPerm);
+      /*       memFree_null(AllInvp); */
+    }
+
+}
+
 /**
  *******************************************************************************
  *
@@ -186,7 +441,8 @@ pastix_subtask_symbfact( pastix_data_t *pastix_data )
         /*
          * Fax works with centralized interface, we convert the cscd to csc if required
          */
-#if defined( PASTIX_DISTRIBUTED )
+// #if defined( PASTIX_DISTRIBUTED )
+#if defined(PASTIX_WITH_MPI)
         if ( graph->loc2glob != NULL ) {
             cscd2csc_int( graph->n,
                           graph->colptr,

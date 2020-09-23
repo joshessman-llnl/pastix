@@ -576,27 +576,30 @@ pastix_subtask_order(       pastix_data_t  *pastix_data,
             }
         }
         else {
-            int baseval = graph->colptr[0];
-            /* Should be 0-based ? */
-            assert (baseval == 0);
+            if ( myorder != NULL )
+            {
+                int baseval = graph->colptr[0];
+                /* Should be 0-based ? */
+                assert (baseval == 0);
 
-            if (myorder->permtab != NULL) {
-                pastix_int_t *permtab = ordemesh->permtab - baseval;
-                pastix_int_t i;
+                if (myorder->permtab != NULL) {
+                    pastix_int_t *permtab = ordemesh->permtab - baseval;
+                    pastix_int_t i;
 
-                for(i=0; i<n; i++) {
-                    myorder->permtab[i] = permtab[spm->loc2glob[i]];
+                    for(i=0; i<n; i++) {
+                        myorder->permtab[i] = permtab[spm->loc2glob[i]];
+                    }
                 }
-            }
-            if (myorder->peritab != NULL) {
-                pastix_int_t *peritab = ordemesh->peritab - baseval;
-                pastix_int_t i;
+                if (myorder->peritab != NULL) {
+                    pastix_int_t *peritab = ordemesh->peritab - baseval;
+                    pastix_int_t i;
 
-                for(i=0; i<n; i++) {
-                    myorder->peritab[i] = peritab[spm->loc2glob[i]];
+                    for(i=0; i<n; i++) {
+                        myorder->peritab[i] = peritab[spm->loc2glob[i]];
+                    }
                 }
+                /* TODO: Copy also rangtab and treetab ? */
             }
-            /* TODO: Copy also rangtab and treetab ? */
         }
     }
 

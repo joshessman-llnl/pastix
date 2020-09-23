@@ -74,6 +74,41 @@ graphNoDiag( pastix_graph_t *graph )
                                       (ia[0]-baseval)*sizeof (pastix_int_t) );
 }
 
+void graphNoDiagDist(pastix_graph_t *graph)
+{
+  pastix_int_t     i, j;
+  pastix_int_t     previous_index = 0;
+  pastix_int_t     index          = 0;
+
+  pastix_int_t n    = graph->n;
+  pastix_int_t* ia  = graph->colptr;
+  pastix_int_t* ja  = graph->rows;
+  double* a         = NULL;
+  pastix_int_t* l2g = graph->loc2glob;
+
+  /* for all local column i */
+  for(i = 0; i < n; i++)
+    {
+      /* for all line in the colupmn */
+      for (j = ia[i]; j < ia[i+1]; j++)
+        {
+          /* if the element is not on diag */
+          if (ja[j-1] != l2g[i] )
+            {
+              /* we add it to ja */
+              ja[index] = ja[j-1];
+              if (NULL != a)
+                a[index] = a[j-1];
+              index++;
+            }
+        }
+      /* we change ia[i] to it's new value */
+      ia[i] = previous_index+1;
+      previous_index = index;
+    }
+  ia[n] = index+1;
+}
+
 /**
  *******************************************************************************
  *
@@ -214,7 +249,8 @@ graphPrepare(      pastix_data_t   *pastix_data,
                 graphNoDiag( tmpgraph );
             }
         }
-#if defined(PASTIX_DISTRIBUTED) && 0
+// #if defined(PASTIX_DISTRIBUTED) && 0
+#if defined(PASTIX_WITH_MPI)
         /*
          * Distributed graph
          */
@@ -231,13 +267,14 @@ graphPrepare(      pastix_data_t   *pastix_data,
             if ( (spm->mtxtype == SpmSymmetric) ||
                  (spm->mtxtype == SpmHermitian) )
             {
-                cscd_symgraph_int(n, colptr, rows, NULL,
-                                  &(tmpgraph->n),
-                                  &(tmpgraph->colptr),
-                                  &(tmpgraph->rows), NULL,
-                                  loc2glob,
-                                  pastix_comm, 1);
-                assert( n == tmpgraph->n );
+                // cscd_symgraph_int(n, colptr, rows, NULL,
+                //                   &(tmpgraph->n),
+                //                   &(tmpgraph->colptr),
+                //                   &(tmpgraph->rows), NULL,
+                //                   loc2glob,
+                //                   pastix_comm, 1);
+                // assert( n == tmpgraph->n );
+                pastix_print(procnum, 0, "%s", "Distributed graphs not supported for sym/herm matrices");
             }
             else
             {
@@ -251,11 +288,13 @@ graphPrepare(      pastix_data_t   *pastix_data,
             MALLOC_INTERN(tmpgraph->loc2glob,   n,   pastix_int_t);
             memcpy(tmpgraph->loc2glob, loc2glob, n*sizeof(pastix_int_t));
 
-            cscd_noDiag(tmpgraph->n,
-                        tmpgraph->colptr,
-                        tmpgraph->rows,
-                        NULL,
-                        loc2glob);
+            // cscd_noDiag(tmpgraph->n,
+            //             tmpgraph->colptr,
+            //             tmpgraph->rows,
+            //             NULL,
+            //             loc2glob);
+
+            graphNoDiagDist(tmpgraph);
 
             /* Create contiguous partitions for ordering tools */
             {
@@ -273,7 +312,7 @@ graphPrepare(      pastix_data_t   *pastix_data,
                 /*
                  * If the partition is incorrect, we create a permutation to linearize the sets
                  */
-                if ( !gok ) {
+                if ( gok ) {
                     pastix_int_t  ldisp;
                     pastix_int_t *all_n;
                     pastix_int_t *displs;
@@ -291,22 +330,25 @@ graphPrepare(      pastix_data_t   *pastix_data,
                         displs[i] = displs[i-1] + all_n[i-1];
                     ldisp = displs[ pastix_data->procnum ] + 1;
 
+                    pastix_int_t    *PTS_permtab;
+                    pastix_int_t    *PTS_peritab;
+
                     /* Collect the locals loc2glob */
-                    MALLOC_INTERN(pastix_data->PTS_peritab, gN, pastix_int_t);
+                    MALLOC_INTERN(PTS_peritab, gN, pastix_int_t);
                     MPI_Allgatherv((void*)loc2glob, n, PASTIX_MPI_INT,
-                                   pastix_data->PTS_peritab, all_n, displs, PASTIX_MPI_INT,
+                                   PTS_peritab, all_n, displs, PASTIX_MPI_INT,
                                    pastix_comm);
 
                     memFree_null(displs);
                     memFree_null(all_n);
 
-                    MALLOC_INTERN(pastix_data->PTS_permtab, gN, pastix_int_t);
+                    MALLOC_INTERN(PTS_permtab, gN, pastix_int_t);
                     for (i = 0; i < gN; i++)
-                        pastix_data->PTS_permtab[pastix_data->PTS_peritab[i]-1] = i+1;
+                        PTS_permtab[PTS_peritab[i]-1] = i+1;
 
                     /* Apply the new permutation to the local graph */
                     for (i = 0; i < (tmpgraph->colptr)[n] - 1; i++)
-                        tmpgraph->rows[i] = pastix_data->PTS_permtab[(tmpgraph->rows)[i]-1];
+                        tmpgraph->rows[i] = PTS_permtab[(tmpgraph->rows)[i]-1];
 
                     /* Initialize loc2glob */
                     copy_l2g = 0;

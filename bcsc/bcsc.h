@@ -66,12 +66,26 @@ bcsc_init_centralized_coltab( const spmatrix_t     *spm,
                               const SolverMatrix   *solvmtx,
                                     pastix_bcsc_t  *bcsc );
 
+pastix_int_t
+bcsc_init_dist_coltab( const spmatrix_t     *spm,
+                              const pastix_order_t *ord,
+                              const SolverMatrix   *solvmtx,
+                                    pastix_bcsc_t  *bcsc );
+
 void
 bcsc_init_centralized( const spmatrix_t     *spm,
                        const pastix_order_t *ord,
                        const SolverMatrix   *solvmtx,
                              pastix_int_t    initAt,
                              pastix_bcsc_t  *bcsc );
+
+void
+bcsc_init_dist( const spmatrix_t     *spm,
+                       const pastix_order_t *ord,
+                       const SolverMatrix   *solvmtx,
+                             pastix_int_t    initAt,
+                             pastix_bcsc_t  *bcsc );
+
 
 void
 bcsc_restore_coltab( pastix_bcsc_t *bcsc );

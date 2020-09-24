@@ -353,6 +353,440 @@ bcsc_init_centralized( const spmatrix_t     *spm,
 /**
  *******************************************************************************
  *
+ * @brief Initialize the coltab of a centralized block csc matrix.
+ *
+ *******************************************************************************
+ *
+ * @param[in] spm
+ *          The initial sparse matrix in the spm format.
+ *
+ * @param[in] ord
+ *          The ordering that needs to be applied on the spm to generate the
+ *          block csc.
+ *
+ * @param[in] solvmtx
+ *          The solver matrix structure that describe the data distribution.
+ *
+ * @param[inout] bcsc
+ *          On entry, the pointer to an allocated bcsc.
+ *          On exit, the bcsc stores the input spm with the permutation applied
+ *          and grouped accordingly to the distribution described in solvmtx.
+ *
+ *******************************************************************************
+ *
+ * @return The number of non zero unknowns in the matrix.
+ *
+ *******************************************************************************/
+pastix_int_t
+bcsc_init_dist_coltab( const spmatrix_t     *spm,
+                              const pastix_order_t *ord,
+                              const SolverMatrix   *solvmtx,
+                                    pastix_bcsc_t  *bcsc )
+{
+    // pastix_int_t  valuesize, baseval;
+    // pastix_int_t *globcol  = NULL;
+    // pastix_int_t *colptr = spm->colptr;
+    // pastix_int_t *rowptr = spm->rowptr;
+    // int dof = spm->dof;
+    // int sym = (spm->mtxtype == SpmSymmetric) || (spm->mtxtype == SpmHermitian);
+
+    bcsc->mtxtype = spm->mtxtype;
+    // baseval = spm->colptr[0];
+
+    /*
+     * Allocate and initialize newcoltab that contains the number of elements in
+     * each column of the input matrix
+     * Globcol is equivalent to the classic colptr for the internal blocked
+     * csc. The blocked csc integrate the perumtation computed within order
+     * structure.
+     */
+    pastix_int_t* colptr = spm->colptr;
+    pastix_int_t* rowind = spm->rowptr;
+    double* val = spm->values;
+    pastix_int_t* l2g = spm->loc2glob;
+    pastix_int_t gNcol = spm->gN;
+    pastix_int_t Ncol = spm->n;
+    pastix_int_t* g2l = spm->glob2loc;
+    pastix_int_t procnum = spm->clustnum;
+    pastix_int_t dof = spm->dof;
+    SPM_Comm comm = spm->comm;
+    pastix_int_t  valuesize;
+    
+    pastix_int_t          index;
+    pastix_int_t          itercol;
+    pastix_int_t          newcol;
+    pastix_int_t          loccol;
+    pastix_int_t          iter;
+    pastix_int_t          rowp1;
+    pastix_int_t          colidx;
+    pastix_int_t          itercblk;
+    pastix_int_t          itercblk2;
+    // pastix_int_t          strdcol     = 0;
+    // pastix_int_t        **trscltb     = NULL;
+    // pastix_int_t         *trowtab     = NULL;
+    pastix_int_t         *cachetab    = NULL;
+    int          commSize;
+    pastix_int_t          proc;
+    pastix_int_t         *tosend      = NULL;
+    MPI_Request *tosend_req  = NULL;
+    MPI_Request *tosend_creq = NULL;
+    MPI_Request *tosend_rreq = NULL;
+    MPI_Request *tosend_vreq = NULL;
+    pastix_int_t         *torecv      = NULL;
+    MPI_Request *torecv_req  = NULL;
+    pastix_int_t         *tosend_cnt  = NULL;
+    pastix_int_t        **tosend_col  = NULL;
+    pastix_int_t        **tosend_row  = NULL;
+    double      **tosend_val  = NULL;
+    pastix_int_t        **torecv_col  = NULL;
+    pastix_int_t        **torecv_row  = NULL;
+    double      **torecv_val  = NULL;
+    pastix_int_t         *newcoltab   = NULL;
+    pastix_int_t          owner;
+    pastix_int_t          therow;
+    #ifndef FORCE_NOMPI
+      MPI_Status   status;
+    #endif
+
+    /* cachetab: contain the column block or -1 if not local */
+    MALLOC_INTERN(cachetab, (gNcol+1)*dof, pastix_int_t);
+    for (itercol=0; itercol< (gNcol+1)*dof; itercol++)
+      cachetab[itercol] = -1;
+    for (itercblk=0; itercblk<solvmtx->cblknbr; itercblk++)
+    {
+      for (itercol=solvmtx->cblktab[itercblk].fcolnum;
+          itercol<solvmtx->cblktab[itercblk].lcolnum+1;
+          itercol++)
+      {
+        cachetab[itercol] = itercblk;
+      }
+    }
+
+    // MPI setup
+    MPI_Comm_size(comm, &commSize);
+  
+    /* tosend will count the number of coefficient to send */
+    MALLOC_INTERN(tosend, commSize, pastix_int_t);
+    for (proc = 0; proc < commSize; proc++)
+      tosend[proc] = 0;
+    MALLOC_INTERN(tosend_req,  commSize, MPI_Request);
+    MALLOC_INTERN(tosend_creq, commSize, MPI_Request);
+    MALLOC_INTERN(tosend_rreq, commSize, MPI_Request);
+    MALLOC_INTERN(tosend_vreq, commSize, MPI_Request);
+
+    /* newcoltab will contain the number of element in each column
+    of the symetrized matrix in the new ordering */
+    MALLOC_INTERN(newcoltab, gNcol+1, pastix_int_t);
+
+    for(index=0; index<(gNcol+1); index++)
+      newcoltab[index] = 0;
+
+    for (itercol=0; itercol<Ncol; itercol++)
+    {
+      newcol = ord->permtab[l2g[itercol]-1];
+
+      newcoltab[newcol] += colptr[itercol+1] - colptr[itercol];
+
+      for (iter=colptr[itercol]; iter<colptr[itercol+1]; iter++)
+      {
+
+        loccol = g2l[rowind[iter-1]-1];
+        if (loccol > 0)
+        {
+          if (spm->mtxtype == SpmSymmetric || spm->mtxtype == SpmHermitian)
+          {
+            if (loccol -1 != itercol)
+            {
+              newcol = ord->permtab[rowind[iter-1]-1];
+              newcoltab[newcol]++;
+            }
+          }
+        }
+        else
+        {
+          tosend[-loccol]++;
+        }
+      }
+    }
+
+    /* Will recv information about what will be received from other processors */
+    MALLOC_INTERN(torecv, commSize, pastix_int_t);
+    for (proc = 0; proc < commSize; proc++)
+      torecv[proc] = 0;
+
+    MALLOC_INTERN(torecv_req, commSize, MPI_Request);
+
+    for (proc = 0; proc < commSize; proc++)
+    {
+      if (proc != procnum)
+      {
+        MPI_Isend(&tosend[proc], 1, PASTIX_MPI_INT, proc, 0,
+                          comm, &tosend_req[proc]);
+              MPI_Irecv(&torecv[proc], 1, PASTIX_MPI_INT, proc, 0,
+                          comm, &torecv_req[proc]);
+            }
+    }
+
+    /* Will contains values from other processors to add to the local
+    internal CSCD */
+    MALLOC_INTERN(tosend_col, commSize, pastix_int_t*);
+    MALLOC_INTERN(tosend_row, commSize, pastix_int_t*);
+    MALLOC_INTERN(tosend_val, commSize, double*);
+    MALLOC_INTERN(tosend_cnt, commSize, pastix_int_t);
+
+    for (proc = 0; proc < commSize; proc++)
+    {
+      if (proc != procnum && tosend[proc] > 0)
+      {
+        MALLOC_INTERN(tosend_col[proc], tosend[proc], pastix_int_t);
+        MALLOC_INTERN(tosend_row[proc], tosend[proc], pastix_int_t);
+        MALLOC_INTERN(tosend_val[proc], tosend[proc]*dof*dof, double);
+      }
+      tosend_cnt[proc] = 0;
+    }
+
+
+    /* Filling in sending tabs with values and rows*/
+    for (itercol=0; itercol<Ncol; itercol++)
+    {
+      itercblk = cachetab[(ord->permtab[l2g[itercol]-1])*dof];
+
+      if (itercblk != -1)
+      {
+        /* ok put the value */
+        for (iter=colptr[itercol]; iter<colptr[itercol+1]; iter++)
+        {
+
+          rowp1 = rowind[iter-1]-1;
+          newcol = ord->permtab[l2g[itercol]-1];
+          therow = ord->permtab[rowp1];
+
+          itercblk2 = cachetab[therow*dof];
+
+          if (itercblk2 != -1)
+          {
+
+          }
+          else
+          {
+            /* Prepare to send row to the owner */
+            owner = -g2l[ord->peritab[therow]];
+
+            tosend_col[owner][tosend_cnt[owner]] = newcol;
+            tosend_row[owner][tosend_cnt[owner]] = therow;
+
+            memcpy(&(tosend_val[owner][tosend_cnt[owner]*dof*dof]),
+                  &(val[(iter-1)*dof*dof]),
+                  sizeof(double)*dof*dof);
+            tosend_cnt[owner]++;
+          }
+        }
+
+      }
+      else
+      {
+        /* Impossible*/
+
+      }
+    }
+
+    /* Sending values to other processors in IJV format. */
+    for (proc = 0; proc < commSize; proc++)
+    {
+      if (proc != procnum)
+      {
+        MPI_Wait(&tosend_req[proc], &status);
+              if (tosend_cnt[proc] > 0)
+        {
+          MPI_Isend(tosend_col[proc], (int)(tosend_cnt[proc]),
+                            PASTIX_MPI_INT, proc, 1, comm, &tosend_creq[proc]);
+                  MPI_Isend(tosend_row[proc], (int)(tosend_cnt[proc]),
+                            PASTIX_MPI_INT, proc, 2, comm, &tosend_rreq[proc]);
+                  MPI_Isend(tosend_val[proc],
+                            (int)(tosend_cnt[proc]*dof*dof),
+                            PASTIX_MPI_DOUBLE, proc, 3, comm, &tosend_vreq[proc]);
+                }
+        MPI_Wait(&torecv_req[proc], &status);
+            }
+    }
+
+    memFree_null(tosend_req);
+    memFree_null(torecv_req);
+
+    /* Receiving information from other processors and updating newcoltab */
+    MALLOC_INTERN(torecv_col, commSize, pastix_int_t*);
+    MALLOC_INTERN(torecv_row, commSize, pastix_int_t*);
+    MALLOC_INTERN(torecv_val, commSize, double*);
+    for (proc = 0; proc < commSize; proc++)
+    {
+      if (proc != procnum && torecv[proc] > 0 )
+      {
+        MALLOC_INTERN(torecv_col[proc], torecv[proc], pastix_int_t);
+        MALLOC_INTERN(torecv_row[proc], torecv[proc], pastix_int_t);
+        MALLOC_INTERN(torecv_val[proc], torecv[proc]*dof*dof, double);
+        MPI_Recv(torecv_col[proc], torecv[proc], PASTIX_MPI_INT,
+                          proc, 1, comm, &status );
+              MPI_Recv(torecv_row[proc], torecv[proc], PASTIX_MPI_INT,
+                          proc, 2, comm, &status );
+              MPI_Recv(torecv_val[proc], torecv[proc]*dof*dof, PASTIX_MPI_DOUBLE,
+                          proc, 3, comm, &status );
+        
+        if (spm->mtxtype == SpmSymmetric || spm->mtxtype == SpmHermitian)
+        {
+          for (iter = 0; iter < torecv[proc]; iter++)
+          {
+            newcol= torecv_row[proc][iter];
+            newcoltab[newcol] ++;
+          }
+        }
+      }
+    }
+
+
+  #if (DBG_SOPALIN_TIME==1)
+    clockStop(&(clk));
+    fprintf(stdout, "CscdOrdistrib step 1 : %.3g s\n",
+            (double)clockVal(&clk));
+    clockInit(&clk);
+    clockStart(&clk);
+  #endif
+    /* Finishing newcoltab construction :
+    *
+    * Now, newcoltab will contain starting index of each
+    * column of rows and values in new ordering
+    */
+    newcol = 0;
+    for (index=0; index<(gNcol+1); index++)
+    {
+      colidx = newcoltab[index];
+      newcoltab[index] = newcol;
+      newcol += colidx;
+    }
+
+    for (proc = 0; proc < commSize; proc++)
+    {
+      if (proc != procnum)
+      {
+        if (torecv[proc] > 0)
+        {
+          memFree_null(torecv_col[proc]);
+          memFree_null(torecv_row[proc]);
+          memFree_null(torecv_val[proc]);
+        }
+      }
+    }
+
+     memFree_null(torecv_col);
+    memFree_null(torecv_row);
+    memFree_null(torecv_val);
+    memFree_null(cachetab);
+    memFree_null(torecv);
+    for (proc = 0; proc < commSize; proc++)
+    {
+      if (proc != procnum)
+      {
+        if (tosend_cnt[proc] > 0)
+        {
+          MPI_Wait(&tosend_creq[proc], &status);
+                  memFree_null(tosend_col[proc]);
+          MPI_Wait(&tosend_rreq[proc], &status);
+                  memFree_null(tosend_row[proc]);
+          MPI_Wait(&tosend_vreq[proc], &status);
+                  memFree_null(tosend_val[proc]);
+        }
+      }
+    }
+    memFree_null(tosend_creq);
+    memFree_null(tosend_rreq);
+    memFree_null(tosend_vreq);
+    memFree_null(tosend_cnt);
+    memFree_null(tosend_col);
+    memFree_null(tosend_row);
+    memFree_null(tosend_val);
+
+    valuesize = bcsc_init_coltab( solvmtx, newcoltab, dof, bcsc );
+    memFree_null( newcoltab );
+
+
+    return valuesize;
+}
+
+
+
+void bcsc_init_dist( const spmatrix_t     *spm,
+                       const pastix_order_t *ord,
+                       const SolverMatrix   *solvmtx,
+                             pastix_int_t    initAt,
+                             pastix_bcsc_t  *bcsc )
+{
+  pastix_int_t  itercol, itercblk;
+    pastix_int_t  cblknbr  = solvmtx->cblknbr;
+    pastix_int_t  eltnbr   = spm->gNexp;
+    pastix_int_t *col2cblk = NULL;
+
+    bcsc->mtxtype = spm->mtxtype;
+    bcsc->flttype = spm->flttype;
+    bcsc->gN      = spm->gN;
+    bcsc->n       = spm->n;
+
+    assert( spm->loc2glob != NULL );
+
+    /*
+     * Initialize the col2cblk array. col2cblk[i] contains the cblk index of the
+     * i-th column. col2cblk[i] = -1 if not local.
+     */
+    {
+        SolverCblk *cblk = solvmtx->cblktab;
+
+        MALLOC_INTERN( col2cblk, eltnbr, pastix_int_t );
+        for (itercol=0; itercol<eltnbr; itercol++)
+        {
+            col2cblk[itercol] = -1;
+        }
+
+        for (itercblk=0; itercblk<cblknbr; itercblk++, cblk++)
+        {
+            if( cblk->cblktype & (CBLK_FANIN|CBLK_RECV) ){
+                continue;
+            }
+            for (itercol  = cblk->fcolnum;
+                 itercol <= cblk->lcolnum;
+                 itercol++ )
+            {
+                col2cblk[itercol] = itercblk;
+            }
+        }
+    }
+
+    /*
+     * Fill in the lower triangular part of the blocked csc with values and
+     * rows. The upper triangular part is done later if required through LU
+     * factorization.
+     */
+    switch( spm->flttype ) {
+    case SpmFloat:
+        bcsc_sinit_dist( spm, ord, solvmtx, col2cblk, initAt, bcsc );
+        break;
+    case SpmDouble:
+        bcsc_dinit_dist( spm, ord, solvmtx, col2cblk, initAt, bcsc );
+        break;
+    case SpmComplex32:
+        bcsc_cinit_dist( spm, ord, solvmtx, col2cblk, initAt, bcsc );
+        break;
+    case SpmComplex64:
+        bcsc_zinit_dist( spm, ord, solvmtx, col2cblk, initAt, bcsc );
+        break;
+    case SpmPattern:
+    default:
+        fprintf(stderr, "bcsc_init_dist: Error unknown floating type for input spm\n");
+    }
+
+    memFree_null(col2cblk);
+}
+
+/**
+ *******************************************************************************
+ *
  * @brief Initialize the block csc matrix.
  *
  * The block csc matrix is used to initialize the factorized matrix, and to
@@ -401,6 +835,7 @@ bcscInit( const spmatrix_t     *spm,
     }
     else {
         fprintf(stderr, "bcscInit: Distributed SPM not yet supported");
+        bcsc_init_dist( spm, ord, solvmtx, initAt, bcsc );
     }
 
     clockStop(time);

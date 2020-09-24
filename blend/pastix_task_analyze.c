@@ -79,8 +79,6 @@ pastix_task_analyze( pastix_data_t    *pastix_data,
     if (rc != PASTIX_SUCCESS) {
         return rc;
     }
-    // Reset to zero for later
-    spmBase(spm, 0);
 
     /*
      * Symbolic factorization step
@@ -89,6 +87,8 @@ pastix_task_analyze( pastix_data_t    *pastix_data,
     if (rc != PASTIX_SUCCESS) {
         return rc;
     }
+    // Reset to zero for later
+    spmBase(spm, 0);
 
     /*
      * Reordering step

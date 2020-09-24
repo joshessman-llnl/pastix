@@ -381,6 +381,7 @@ pastix_int_t
 bcsc_init_dist_coltab( const spmatrix_t     *spm,
                               const pastix_order_t *ord,
                               const SolverMatrix   *solvmtx,
+                              const pastix_int_t   *col2cblk,
                                     pastix_bcsc_t  *bcsc )
 {
     // pastix_int_t  valuesize, baseval;
@@ -424,7 +425,6 @@ bcsc_init_dist_coltab( const spmatrix_t     *spm,
     // pastix_int_t          strdcol     = 0;
     // pastix_int_t        **trscltb     = NULL;
     // pastix_int_t         *trowtab     = NULL;
-    pastix_int_t         *cachetab    = NULL;
     int          commSize;
     pastix_int_t          proc;
     pastix_int_t         *tosend      = NULL;
@@ -447,20 +447,6 @@ bcsc_init_dist_coltab( const spmatrix_t     *spm,
     #ifndef FORCE_NOMPI
       MPI_Status   status;
     #endif
-
-    /* cachetab: contain the column block or -1 if not local */
-    MALLOC_INTERN(cachetab, (gNcol+1)*dof, pastix_int_t);
-    for (itercol=0; itercol< (gNcol+1)*dof; itercol++)
-      cachetab[itercol] = -1;
-    for (itercblk=0; itercblk<solvmtx->cblknbr; itercblk++)
-    {
-      for (itercol=solvmtx->cblktab[itercblk].fcolnum;
-          itercol<solvmtx->cblktab[itercblk].lcolnum+1;
-          itercol++)
-      {
-        cachetab[itercol] = itercblk;
-      }
-    }
 
     // MPI setup
     MPI_Comm_size(comm, &commSize);
@@ -549,7 +535,7 @@ bcsc_init_dist_coltab( const spmatrix_t     *spm,
     /* Filling in sending tabs with values and rows*/
     for (itercol=0; itercol<Ncol; itercol++)
     {
-      itercblk = cachetab[(ord->permtab[l2g[itercol]-1])*dof];
+      itercblk = col2cblk[(ord->permtab[l2g[itercol]-1])*dof];
 
       if (itercblk != -1)
       {
@@ -561,7 +547,7 @@ bcsc_init_dist_coltab( const spmatrix_t     *spm,
           newcol = ord->permtab[l2g[itercol]-1];
           therow = ord->permtab[rowp1];
 
-          itercblk2 = cachetab[therow*dof];
+          itercblk2 = col2cblk[therow*dof];
 
           if (itercblk2 != -1)
           {
@@ -679,7 +665,6 @@ bcsc_init_dist_coltab( const spmatrix_t     *spm,
      memFree_null(torecv_col);
     memFree_null(torecv_row);
     memFree_null(torecv_val);
-    memFree_null(cachetab);
     memFree_null(torecv);
     for (proc = 0; proc < commSize; proc++)
     {

@@ -70,6 +70,7 @@ pastix_int_t
 bcsc_init_dist_coltab( const spmatrix_t     *spm,
                               const pastix_order_t *ord,
                               const SolverMatrix   *solvmtx,
+                              const pastix_int_t   *col2cblk,
                                     pastix_bcsc_t  *bcsc );
 
 void

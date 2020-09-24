@@ -117,6 +117,103 @@ bcsc_zinit_A( const spmatrix_t     *spm,
  *
  * @ingroup bcsc_internal
  *
+ * @brief Initialize the values in the block csc stored in the given spm.
+ *
+ *******************************************************************************
+ *
+ * @param[in] spm
+ *          The initial sparse matrix in the spm format.
+ *
+ * @param[in] ord
+ *          The ordering that needs to be applied on the spm to generate the
+ *          block csc.
+ *
+ * @param[in] solvmtx
+ *          The solver matrix structure that describe the data distribution.
+ *
+ * @param[in] col2cblk
+ *          Array of matching column with cblk indexes.
+ *
+ * @param[inout] bcsc
+ *          On entry, the pointer to an allocated bcsc.
+ *          On exit, the bcsc values field is updated.
+ *
+ *******************************************************************************/
+static inline void
+bcsc_zinit_A_dist( const spmatrix_t     *spm,
+              const pastix_order_t *ord,
+              const SolverMatrix   *solvmtx,
+              const pastix_int_t   *col2cblk,
+                    pastix_bcsc_t  *bcsc )
+{
+    pastix_complex64_t *values  = (pastix_complex64_t*)(spm->values);
+    pastix_complex64_t *Lvalues = (pastix_complex64_t*)(bcsc->Lvalues);
+    pastix_int_t itercblk, iterbcsc, itercol, baseval;
+    pastix_int_t i, ival, idofcol, idofrow;
+    int dof = spm->dof;
+
+    baseval = spm->colptr[0];
+
+    pastix_int_t* l2g = spm->loc2glob;
+
+    /**
+     * Initialize the values of the matrix A in the blocked csc format. This
+     * applies the permutation to the values array.
+     */
+    for (itercol=0; itercol<spm->n; itercol++)
+    {
+        pastix_int_t *coltab;
+        pastix_int_t  fcolnum, frow, lrow;
+        // FIXME subtract 1 depending on baseval?
+        pastix_int_t  itercol2 = ord->permtab[l2g[itercol] - baseval] * dof;
+        itercblk = col2cblk[ itercol2 ];
+
+        /* The block column is not stored locally, we skip it */
+        if ( itercblk == -1 ) {
+            continue;
+        }
+
+        fcolnum  = solvmtx->cblktab[itercblk].fcolnum;
+        iterbcsc = solvmtx->cblktab[itercblk].bcscnum;
+        coltab   = bcsc->cscftab[iterbcsc].coltab;
+
+        frow = spm->colptr[itercol]   - baseval;
+        lrow = spm->colptr[itercol+1] - baseval;
+
+        for (i=frow; i<lrow; i++)
+        {
+            pastix_int_t iterrow  = spm->rowptr[i]-baseval;
+            pastix_int_t iterrow2 = ord->permtab[iterrow] * dof;
+            ival = i * dof * dof;
+
+            for (idofcol = 0; idofcol < dof; idofcol++)
+            {
+                pastix_int_t colidx = itercol2 + idofcol - fcolnum;
+                pastix_int_t rowidx = iterrow2;
+                pastix_int_t pos = coltab[ colidx ];
+
+                for (idofrow = 0; idofrow < dof;
+                     idofrow++, ival++, rowidx++, pos++)
+                {
+                    bcsc->rowtab[ pos ] = rowidx;
+                    if (iterrow != l2g[itercol] - baseval)
+                    {
+                        Lvalues[ pos ] = values[ ival ];
+                    }
+                }
+
+                coltab[ colidx ] += dof;
+                assert( coltab[ colidx ] <= coltab[ colidx+1 ] );
+            }
+        }
+    }
+}
+
+/**
+ *******************************************************************************
+ *
+ * @ingroup bcsc_internal
+ *
  * @brief Initialize the values in the block csc (upper part) for a symmetric
  * matrix since only one side has been initialized by bcsc_zinit_A()
  *
@@ -401,6 +498,166 @@ bcsc_zinit_At( const spmatrix_t     *spm,
                 }
             }
         }
+    }
+}
+
+/**
+ *******************************************************************************
+ *
+ * @brief Initialize a value array with the transpose of A that will be used to
+ * initialize the coeftab arrays.
+ *
+ *******************************************************************************
+ *
+ * @param[in] spm
+ *          The initial sparse matrix in the spm format.
+ *
+ * @param[in] ord
+ *          The ordering that needs to be applied on the spm to generate the
+ *          block csc.
+ *
+ * @param[in] solvmtx
+ *          The solver matrix structure that describe the data distribution.
+ *
+ * @param[in] col2cblk
+ *          Array of matching column with cblk indexes.
+ *
+ * @param[out] trowtab
+ *          The row tab associated to the transposition of A.
+ *
+ * @param[inout] bcsc
+ *          On entry, the pointer to an allocated bcsc.
+ *          On exit, the bcsc Uvalues field is updated.
+ *
+ *******************************************************************************/
+void
+bcsc_zinit_At_dist( const spmatrix_t     *spm,
+               const pastix_order_t *ord,
+               const SolverMatrix   *solvmtx,
+               const pastix_int_t   *col2cblk,
+                     pastix_int_t   *trowtab,
+                     pastix_bcsc_t  *bcsc )
+{
+    pastix_complex64_t *values  = (pastix_complex64_t*)(spm->values);
+    pastix_complex64_t *Uvalues = (pastix_complex64_t*)(bcsc->Uvalues);
+    pastix_int_t itercblk, iterbcsc, itercol, baseval;
+    pastix_int_t i, ival, idofcol, idofrow;
+    pastix_int_t* l2g = spm->loc2glob;
+    int dof = spm->dof;
+
+    baseval = spm->colptr[0];
+
+    /**
+     * Initialize the values of the matrix A^t in the blocked csc format. This
+     * applies the permutation to the values array.
+     */
+    // for (itercol=0; itercol<spm->n; itercol++)
+    // {
+    //     pastix_int_t frow, lrow;
+    //     // pastix_int_t itercol2 = ord->permtab[itercol] * dof;
+    //     pastix_int_t itercol2 = ord->permtab[l2g[itercol] - baseval] * dof;
+        
+
+    //     frow = spm->colptr[itercol]   - baseval;
+    //     lrow = spm->colptr[itercol+1] - baseval;
+
+    //     for (i=frow; i<lrow; i++)
+    //     {
+    //         pastix_int_t *coltab;
+    //         pastix_int_t fcolnum;
+    //         pastix_int_t iterrow  = spm->rowptr[i]-baseval;
+    //         // pastix_int_t iterrow2 = ord->permtab[iterrow] * dof;
+    //         pastix_int_t iterrow2 = ord->permtab[iterrow] * dof;
+
+
+    //         itercblk = col2cblk[ iterrow2 ];
+
+    //         /* The block column is not stored locally, we skip it */
+    //         if ( itercblk == -1 ) {
+    //             continue;
+    //         }
+
+    //         fcolnum  = solvmtx->cblktab[itercblk].fcolnum;
+    //         iterbcsc = solvmtx->cblktab[itercblk].bcscnum;
+    //         coltab   = bcsc->cscftab[iterbcsc].coltab;
+
+    //         ival = i * dof * dof;
+
+    //         for (idofcol = 0; idofcol < dof; idofcol++)
+    //         {
+    //             pastix_int_t colidx = itercol2 + idofcol;
+    //             pastix_int_t rowidx = iterrow2 - fcolnum;
+    //             pastix_int_t pos;
+
+    //             for (idofrow = 0; idofrow < dof;
+    //                  idofrow++, ival++, rowidx++)
+    //             {
+    //                 pos = coltab[ rowidx ];
+
+    //                 trowtab[ pos ] = colidx;
+    //                 Uvalues[ pos ] = values[ ival ];
+
+    //                 coltab[ rowidx ]++;
+    //             }
+    //         }
+    //     }
+    // }
+
+    for (itercol=0; itercol<spm->n; itercol++)
+    {
+        itercblk = col2cblk[(ord->permtab[l2g[itercol]-1])*dof];
+
+        if (itercblk != -1)
+        {
+             pastix_int_t frow, lrow;
+            // pastix_int_t itercol2 = ord->permtab[itercol] * dof;
+            pastix_int_t itercol2 = ord->permtab[l2g[itercol] - baseval] * dof;
+            
+
+            frow = spm->colptr[itercol]   - baseval;
+            lrow = spm->colptr[itercol+1] - baseval;
+            /* ok put the value */
+            for (i=frow; i<lrow; i++)
+            {
+
+                for (idofcol = 0; idofcol < dof; idofcol++)
+                {
+                    for (idofrow = 0; idofrow < dof; idofrow++)
+                    {
+                        // pastix_int_t pos = iterrow2 - fcolnum;
+                        pastix_int_t iterrow = spm->rowptr[i-baseval]-baseval; 
+                        pastix_int_t iterrow2 = ord->permtab[iterrow]*dof + idofrow; 
+                        pastix_int_t itercblk2 = col2cblk[iterrow2];
+                        pastix_int_t newcol = (ord->permtab[l2g[itercol]-1])*dof+idofcol;
+
+                        ival = (i - baseval) * dof * dof + idofcol * dof + idofrow;
+
+
+                        if (itercblk2 != -1)
+                        {
+                            pastix_int_t fcolnum  = solvmtx->cblktab[itercblk2].fcolnum;
+                            pastix_int_t iterbcsc = solvmtx->cblktab[itercblk].bcscnum;
+                            pastix_int_t* coltab   = bcsc->cscftab[iterbcsc].coltab;
+                            pastix_int_t rowidx = iterrow2 - fcolnum;
+                            pastix_int_t pos = coltab[rowidx];
+                            // SET_TRANS_ROW_VAL(itercblk2, therow, newcol,
+                            //                     val);
+                            trowtab[ pos ] = newcol;
+                            Uvalues[ pos ] = values[ ival ];
+                            coltab[ rowidx ]++;
+
+                        }
+                    }
+                }
+        }
+
+        }
+        else
+        {
+        /* Impossible*/
+        errorPrint("Error in CscdOrdistrib");
+        EXIT(MOD_SOPALIN, UNKNOWN_ERR)
+            }
     }
 }
 
@@ -813,7 +1070,6 @@ bcsc_zinit_dist( const spmatrix_t     *spm,
     pastix_int_t          strdcol     = 0;
     pastix_int_t        **trscltb     = NULL;
     pastix_int_t         *trowtab     = NULL;
-    pastix_int_t         *cachetab    = NULL;
     int          commSize;
     pastix_int_t          proc;
     pastix_int_t         *tosend      = NULL;
@@ -830,7 +1086,7 @@ bcsc_zinit_dist( const spmatrix_t     *spm,
     pastix_int_t        **torecv_col  = NULL;
     pastix_int_t        **torecv_row  = NULL;
     double      **torecv_val  = NULL;
-    pastix_int_t         *newcoltab   = NULL;
+    // pastix_int_t         *newcoltab   = NULL;
     // pastix_int_t          owner;
     pastix_int_t          therow;
     #ifndef FORCE_NOMPI
@@ -857,7 +1113,7 @@ bcsc_zinit_dist( const spmatrix_t     *spm,
     #endif
 
     // FIXME this is almost definitely wrong
-    strdcol = bcsc_init_dist_coltab(spm, ord, solvmtx, bcsc);
+    strdcol = bcsc_init_dist_coltab(spm, ord, solvmtx, col2cblk, bcsc);
 
 
     /* Initialize some MPI structures */
@@ -871,298 +1127,35 @@ bcsc_zinit_dist( const spmatrix_t     *spm,
     MALLOC_INTERN(tosend_creq, commSize, MPI_Request);
     MALLOC_INTERN(tosend_rreq, commSize, MPI_Request);
     MALLOC_INTERN(tosend_vreq, commSize, MPI_Request);
-
-    /* cachetab: contain the column block or -1 if not local */
-    MALLOC_INTERN(cachetab, (gNcol+1)*dof, pastix_int_t);
-    for (itercol=0; itercol< (gNcol+1)*dof; itercol++)
-        cachetab[itercol] = -1;
-    for (itercblk=0; itercblk<solvmtx->cblknbr; itercblk++)
-    {
-        for (itercol=solvmtx->cblktab[itercblk].fcolnum;
-            itercol<solvmtx->cblktab[itercblk].lcolnum+1;
-            itercol++)
-        {
-        cachetab[itercol] = itercblk;
-        }
-    }
-
-    //   /* newcoltab will contain the number of element in each column
-    //    of the symetrized matrix in the new ordering */
-    //   MALLOC_INTERN(newcoltab, gNcol+1, pastix_int_t);
-
-    //   for(index=0; index<(gNcol+1); index++)
-    //     newcoltab[index] = 0;
-
-    //   for (itercol=0; itercol<Ncol; itercol++)
-    //   {
-    //     newcol = ord->permtab[l2g[itercol]-1];
-
-    //     newcoltab[newcol] += colptr[itercol+1] - colptr[itercol];
-
-    //     for (iter=colptr[itercol]; iter<colptr[itercol+1]; iter++)
-    //     {
-
-    //       loccol = g2l[rowind[iter-1]-1];
-    //       if (loccol > 0)
-    //       {
-    //         if (spm->mtxtype == SpmSymmetric || spm->mtxtype == SpmHermitian)
-    //         {
-    //           if (loccol -1 != itercol)
-    //           {
-    //             newcol = ord->permtab[rowind[iter-1]-1];
-    //             newcoltab[newcol]++;
-    //           }
-    //         }
-    //       }
-    //       else
-    //       {
-    //         tosend[-loccol]++;
-    //       }
-    //     }
-    //   }
-
-    //   /* Will recv information about what will be received from other processors */
-    //   MALLOC_INTERN(torecv, commSize, pastix_int_t);
-    //   for (proc = 0; proc < commSize; proc++)
-    //     torecv[proc] = 0;
-
-    //   MALLOC_INTERN(torecv_req, commSize, MPI_Request);
-
-    //   for (proc = 0; proc < commSize; proc++)
-    //   {
-    //     if (proc != procnum)
-    //     {
-    //       MPI_Isend(&tosend[proc], 1, PASTIX_MPI_INT, proc, 0,
-    //                          comm, &tosend_req[proc]);
-    //             MPI_Irecv(&torecv[proc], 1, PASTIX_MPI_INT, proc, 0,
-    //                          comm, &torecv_req[proc]);
-    //           }
-    //   }
-
-    //   /* Will contains values from other processors to add to the local
-    //    internal CSCD */
-    //   MALLOC_INTERN(tosend_col, commSize, pastix_int_t*);
-    //   MALLOC_INTERN(tosend_row, commSize, pastix_int_t*);
-    //   MALLOC_INTERN(tosend_val, commSize, double*);
-    //   MALLOC_INTERN(tosend_cnt, commSize, pastix_int_t);
-
-    //   for (proc = 0; proc < commSize; proc++)
-    //   {
-    //     if (proc != procnum && tosend[proc] > 0)
-    //     {
-    //       MALLOC_INTERN(tosend_col[proc], tosend[proc], pastix_int_t);
-    //       MALLOC_INTERN(tosend_row[proc], tosend[proc], pastix_int_t);
-    //       MALLOC_INTERN(tosend_val[proc], tosend[proc]*dof*dof, double);
-    //     }
-    //     tosend_cnt[proc] = 0;
-    //   }
-
-
-    //   /* Filling in sending tabs with values and rows*/
-    //   for (itercol=0; itercol<Ncol; itercol++)
-    //   {
-    //     itercblk = cachetab[(ord->permtab[l2g[itercol]-1])*dof];
-
-    //     if (itercblk != -1)
-    //     {
-    //       /* ok put the value */
-    //       for (iter=colptr[itercol]; iter<colptr[itercol+1]; iter++)
-    //       {
-
-    //         rowp1 = rowind[iter-1]-1;
-    //         newcol = ord->permtab[l2g[itercol]-1];
-    //         therow = ord->permtab[rowp1];
-
-    //         itercblk2 = cachetab[therow*dof];
-
-    //         if (itercblk2 != -1)
-    //         {
-
-    //         }
-    //         else
-    //         {
-    //           /* Prepare to send row to the owner */
-    //           owner = -g2l[ord->peritab[therow]];
-
-    //           tosend_col[owner][tosend_cnt[owner]] = newcol;
-    //           tosend_row[owner][tosend_cnt[owner]] = therow;
-
-    //           memcpy(&(tosend_val[owner][tosend_cnt[owner]*dof*dof]),
-    //                  &(val[(iter-1)*dof*dof]),
-    //                  sizeof(double)*dof*dof);
-    //           tosend_cnt[owner]++;
-    //         }
-    //       }
-
-    //     }
-    //     else
-    //     {
-    //       /* Impossible*/
-
-    //     }
-    //   }
-
-    //   /* Sending values to other processors in IJV format. */
-    //   for (proc = 0; proc < commSize; proc++)
-    //   {
-    //     if (proc != procnum)
-    //     {
-    //       MPI_Wait(&tosend_req[proc], &status);
-    //             if (tosend_cnt[proc] > 0)
-    //       {
-    //         MPI_Isend(tosend_col[proc], (int)(tosend_cnt[proc]),
-    //                            PASTIX_MPI_INT, proc, 1, comm, &tosend_creq[proc]);
-    //                 MPI_Isend(tosend_row[proc], (int)(tosend_cnt[proc]),
-    //                            PASTIX_MPI_INT, proc, 2, comm, &tosend_rreq[proc]);
-    //                 MPI_Isend(tosend_val[proc],
-    //                            (int)(tosend_cnt[proc]*dof*dof),
-    //                            PASTIX_MPI_DOUBLE, proc, 3, comm, &tosend_vreq[proc]);
-    //               }
-    //       MPI_Wait(&torecv_req[proc], &status);
-    //           }
-    //   }
-
-    //   memFree_null(tosend_req);
-    //   memFree_null(torecv_req);
-
-    //   /* Receiving information from other processors and updating newcoltab */
-    //   MALLOC_INTERN(torecv_col, commSize, pastix_int_t*);
-    //   MALLOC_INTERN(torecv_row, commSize, pastix_int_t*);
-    //   MALLOC_INTERN(torecv_val, commSize, double*);
-    //   for (proc = 0; proc < commSize; proc++)
-    //   {
-    //     if (proc != procnum && torecv[proc] > 0 )
-    //     {
-    //       MALLOC_INTERN(torecv_col[proc], torecv[proc], pastix_int_t);
-    //       MALLOC_INTERN(torecv_row[proc], torecv[proc], pastix_int_t);
-    //       MALLOC_INTERN(torecv_val[proc], torecv[proc]*dof*dof, double);
-    //       MPI_Recv(torecv_col[proc], torecv[proc], PASTIX_MPI_INT,
-    //                         proc, 1, comm, &status );
-    //             MPI_Recv(torecv_row[proc], torecv[proc], PASTIX_MPI_INT,
-    //                         proc, 2, comm, &status );
-    //             MPI_Recv(torecv_val[proc], torecv[proc]*dof*dof, PASTIX_MPI_DOUBLE,
-    //                         proc, 3, comm, &status );
-        
-    //       if (spm->mtxtype == SpmSymmetric || spm->mtxtype == SpmHermitian)
-    //       {
-    //         for (iter = 0; iter < torecv[proc]; iter++)
-    //         {
-    //           newcol= torecv_row[proc][iter];
-    //           newcoltab[newcol] ++;
-    //         }
-    //       }
-    //     }
-    //   }
-
-
-    // #if (DBG_SOPALIN_TIME==1)
-    //   clockStop(&(clk));
-    //   fprintf(stdout, "CscdOrdistrib step 1 : %.3g s\n",
-    //           (double)clockVal(&clk));
-    //   clockInit(&clk);
-    //   clockStart(&clk);
-    // #endif
-    //   /* Finishing newcoltab construction :
-    //    *
-    //    * Now, newcoltab will contain starting index of each
-    //    * column of rows and values in new ordering
-    //    */
-    //   newcol = 0;
-    //   for (index=0; index<(gNcol+1); index++)
-    //   {
-    //     colidx = newcoltab[index];
-    //     newcoltab[index] = newcol;
-    //     newcol += colidx;
-    //   }
-
-    // SET_CSC_COL(newcoltab);
-    /* Local coltab */
-        // thecsc->cscfnbr = solvmtx->cblknbr;
-        // MALLOC_INTERN(thecsc->cscftab, thecsc->cscfnbr, bcsc_cblk_t);
-
-        // for (index=0; index<solvmtx->cblknbr; index++)
-        // {
-        //   pastix_int_t fcolnum = solvmtx->cblktab[index].fcolnum;
-        //   pastix_int_t lcolnum = solvmtx->cblktab[index].lcolnum;
-        //   thecsc->cscftab[index].colnbr = (lcolnum - fcolnum+1);
-
-        //   MALLOC_INTERN(thecsc->cscftab[index].coltab,
-        //                 thecsc->cscftab[index].colnbr + 1, pastix_int_t);
-
-        //   if ((fcolnum)%dof != 0)
-        //     errorPrint("dof doesn't divide fcolnum");
-
-        //   colsize = 0;
-        //   for (iter=0; iter<(thecsc->cscftab[index].colnbr + 1); iter++)
-        //   {
-        //     /* fcolnum %dof = 0 */
-        //     nodeidx = (fcolnum+(iter-iter%dof))/dof;
-        //     if (g2l != NULL &&
-        //         iter != thecsc->cscftab[index].colnbr &&
-        //         !(g2l[ord->peritab[nodeidx]] > 0))
-        //     {
-        //       errorPrint("Columns in internal CSCD must be in given CSCD");
-        //     }
-
-        //     thecsc->cscftab[index].coltab[iter] = colsize+ strdcol;
-        //     if (iter < thecsc->cscftab[index].colnbr)
-        //     {
-        //       colsize = (newcoltab[nodeidx+1] -
-        //                  newcoltab[nodeidx])*dof;
-        //     }
-        //     strdcol =  thecsc->cscftab[index].coltab[iter];
-        //   }
-
-        //   /* strdcol <- colptr[n] for the index_th column block */
-        //   /*   ie : the number of element in the column block */
-
-        //   strdcol = thecsc->cscftab[index].coltab[thecsc->cscftab[index].colnbr];
-        // }
-        // memFree_null(newcoltab);
-
-    #if (DBG_SOPALIN_TIME==1)
-    clockStop(&(clk));
-    fprintf(stdout, "CscdOrdistrib step 2 : %.3g s\n",
-            (double)clockVal(&clk));
-    clockInit(&clk);
-    clockStart(&clk);
-    #endif
-
-    // CSC_ALLOC macro
-    // MALLOC_INTERN(thecsc->rowtab, strdcol, pastix_int_t);              
-    // MALLOC_INTERN(thecsc->Lvalues, strdcol, double);            // FIXME: Transpose values?
                                                                     
-        // if (bcsc->Uvalues != NULL)                                         
-        // {     
-        if (spm->mtxtype == SpmSymmetric || spm->mtxtype == SpmHermitian)
-        {                                                           
-            if (forcetrans == 1)                                
-            {                                                         
-                thecsc->Uvalues = thecsc->Lvalues;                  
-            }                                                         
-        }                                                           
-        else                                                        
-        {                                                           
-            MALLOC_INTERN( bcsc->Uvalues, strdcol * pastix_size_of( bcsc->flttype ), char );          
-            MALLOC_INTERN(trowtab, strdcol, pastix_int_t);                     
-            MALLOC_INTERN(trscltb, solvmtx->cblknbr, pastix_int_t *);          
-                                                                        
-            for (index=0; index<solvmtx->cblknbr; index++)            
-            {                                                         
-                MALLOC_INTERN(trscltb[index],                           
-                            thecsc->cscftab[index].colnbr + 1, pastix_int_t);         
-                for (iter=0; iter<(thecsc->cscftab[index].colnbr + 1); iter++) 
-                {                                                       
-                    trscltb[index][iter] = thecsc->cscftab[index].coltab[iter];    
-                }                                                       
-            }                                                         
-        }                                                           
-        // }                                                             
+    if (spm->mtxtype == SpmSymmetric || spm->mtxtype == SpmHermitian)
+    {                                                           
+        if (forcetrans == 1)                                
+        {                                                         
+            thecsc->Uvalues = thecsc->Lvalues;                  
+        }                                                         
+    }                                                           
+    else                                                        
+    {                                                           
+        MALLOC_INTERN( bcsc->Uvalues, strdcol * pastix_size_of( bcsc->flttype ), char );          
+        MALLOC_INTERN(trowtab, strdcol, pastix_int_t);                     
+        MALLOC_INTERN(trscltb, solvmtx->cblknbr, pastix_int_t *);          
+                                                                    
+        for (index=0; index<solvmtx->cblknbr; index++)            
+        {                                                         
+            MALLOC_INTERN(trscltb[index],                           
+                        thecsc->cscftab[index].colnbr + 1, pastix_int_t);         
+            for (iter=0; iter<(thecsc->cscftab[index].colnbr + 1); iter++) 
+            {                                                       
+                trscltb[index][iter] = thecsc->cscftab[index].coltab[iter];    
+            }                                                       
+        }                                                         
+    }                                            
 
     /* Filling in thecsc with values and rows*/
     for (itercol=0; itercol<Ncol; itercol++)
     {
-        itercblk = cachetab[(ord->permtab[l2g[itercol]-1])*dof];
+        itercblk = col2cblk[(ord->permtab[l2g[itercol]-1])*dof];
 
         if (itercblk != -1)
         {
@@ -1177,51 +1170,15 @@ bcsc_zinit_dist( const spmatrix_t     *spm,
                 rowp1 = rowind[iter-1]-1;
                 therow = ord->permtab[rowp1]*dof + iterdofrow;
                 newcol = (ord->permtab[l2g[itercol]-1])*dof+iterdofcol;
-                SET_CSC_ROW_VAL(itercblk, therow, newcol, val);
+                // The call to bcsc_zinit_A_dist replaces this and is memory safe, apparently
+                // SET_CSC_ROW_VAL(itercblk, therow, newcol, val);
 
-                itercblk2 = cachetab[therow];
+                itercblk2 = col2cblk[therow];
 
                 if (itercblk2 != -1)
                 {
-                switch (spm->mtxtype)
-                {
-                case SpmSymmetric:
-                {
-                    if (rowp1 != l2g[itercol]-1)
-                    {
-                    /* same thing but newcol <-> therow */
-                    SET_CSC_ROW_VAL(itercblk2, newcol, therow,
-                                    val);
-
-                    }
-                    break;
-                }
-                #if defined(PRECISION_z) || defined(PRECISION_c)
-                case SpmHermitian:
-                {
-                    if (rowp1 != l2g[itercol]-1)
-                    {
-                    /* same thing but newcol <-> therow */
-                    SET_CSC_ROW_VAL_CONJ(itercblk2, newcol, therow,
-                                    val);
-
-                    }
-                    break;
-                }
-                #endif /* #if defined(PRECISION_z) || defined(PRECISION_c) */
-                case SpmGeneral:
-                {
-                    // if (bcsc->Uvalues != NULL)
-                    // {
                     SET_TRANS_ROW_VAL(itercblk2, therow, newcol,
                                         val);
-                    // }
-                    break;
-                }
-                default:
-                    errorPrint("Unknown Matrix Type");
-                    EXIT(MOD_SOPALIN, UNKNOWN_ERR);
-                }
 
                 }
             }
@@ -1236,6 +1193,14 @@ bcsc_zinit_dist( const spmatrix_t     *spm,
         EXIT(MOD_SOPALIN, UNKNOWN_ERR)
             }
     }
+    bcsc_zinit_A_dist( spm, ord, solvmtx, col2cblk, bcsc );
+    // Completely broken
+    // if ( spm->mtxtype == SpmGeneral ) {
+    // /* A^t is not required if only refinement is performed */
+    //     if (initAt) {
+    //         bcsc_zinit_At_dist( spm, ord, solvmtx, col2cblk, trowtab, bcsc );
+    //     }
+    // }
 
     memFree_null(tosend);
 
@@ -1255,7 +1220,7 @@ bcsc_zinit_dist( const spmatrix_t     *spm,
                 {
                 newcol  = torecv_col[proc][iter]*dof+iterdofcol;
                 therow  = torecv_row[proc][iter]*dof+iterdofrow;
-                itercblk2 = cachetab[therow];
+                itercblk2 = col2cblk[therow];
                 /* iter is 0 based here, not in SET_CSC_ROW_VAL */
                 iter++;
                 SET_CSC_ROW_VAL(itercblk2, newcol, therow,
@@ -1268,7 +1233,7 @@ bcsc_zinit_dist( const spmatrix_t     *spm,
                 {
                 newcol  = torecv_col[proc][iter]*dof+iterdofcol;
                 therow  = torecv_row[proc][iter]*dof+iterdofrow;
-                itercblk2 = cachetab[therow];
+                itercblk2 = col2cblk[therow];
                 /* iter is 0 based here, not in SET_CSC_ROW_VAL */
                 iter++;
                 SET_CSC_ROW_VAL_CONJ(itercblk2, newcol, therow,
@@ -1283,7 +1248,7 @@ bcsc_zinit_dist( const spmatrix_t     *spm,
                 // {
                     newcol = torecv_col[proc][iter]*dof+iterdofcol;
                     therow = torecv_row[proc][iter]*dof+iterdofrow;
-                    itercblk2 = cachetab[therow];
+                    itercblk2 = col2cblk[therow];
                     /* iter is 0 based here,
                     not in SET_TRANS_ROW_VAL */
                     iter++;
@@ -1311,7 +1276,6 @@ bcsc_zinit_dist( const spmatrix_t     *spm,
     memFree_null(torecv_col);
     memFree_null(torecv_row);
     memFree_null(torecv_val);
-    memFree_null(cachetab);
     memFree_null(torecv);
     for (proc = 0; proc < commSize; proc++)
     {
@@ -1347,95 +1311,27 @@ bcsc_zinit_dist( const spmatrix_t     *spm,
 
     /* 2nd membre */
     /* restore good coltab */
-    colidx = 0;
-    for (index=0; index<solvmtx->cblknbr; index++)
-    {
-        for(iter=0;iter<(thecsc->cscftab[index].colnbr+1); iter++)
-        {
-        newcol = thecsc->cscftab[index].coltab[iter];
-        thecsc->cscftab[index].coltab[iter] = colidx;
-        colidx = newcol;
-        }
-    }
-
-    #if (DBG_SOPALIN_TIME==1)
-    clockStop(&(clk));
-    fprintf(stdout, "CscdOrdistrib step 3 : %.3g s\n",
-            (double)clockVal(&clk));
-    clockInit(&clk);
-    clockStart(&clk);
-    #endif
-
-    //   CSC_SORT;
-    /* Sort */                                                         
-        // for (index=0; index<solvmtx->cblknbr; index++) {                   
-        //   for (iter=0; iter<thecsc->cscftab[index].colnbr; iter++) {            
-        //     pastix_int_t   *t = &(thecsc->rowtab[thecsc->cscftab[index].coltab[iter]]);              
-        //     double *v = &(((double*)thecsc->Lvalues)[thecsc->cscftab[index].coltab[iter]]);              
-        //     pastix_int_t    n = thecsc->cscftab[index].coltab[iter+1]-                
-        //       thecsc->cscftab[index].coltab[iter];                                  
-        //     pastix_int_t    ndof2 = 1; /* internal CSC is with one DoF */    
-        //     void * sortptr[3];                                             
-        //     sortptr[0] = t;                                                
-        //     sortptr[1] = v;                                                
-        //     sortptr[2] = &ndof2;                                           
-        //     z_qsortIntFloatAsc(sortptr, n);                                  
-        //   }                                                                
-        // }         
-           
-        // if (spm->mtxtype == SpmGeneral && forcetrans) {
-        //     bcsc_zinit_At( spm, ord, solvmtx, col2cblk, trowtab, bcsc );
-        // }
-        // if (bcsc->Uvalues != NULL) {                     
-        // if (!forcetrans) {                                               
-        //     // for (index=0; index<solvmtx->cblknbr; index++) {               
-        //     //   for (iter=0; iter<thecsc->cscftab[index].colnbr; iter++) {        
-        //     //     pastix_int_t   *t = &(trowtab[thecsc->cscftab[index].coltab[iter]]);  
-        //     //     double *v = &(((double*)bcsc->Uvalues)[thecsc->cscftab[index].coltab[iter]]);     
-        //     //     pastix_int_t n;                                              
-        //     //     pastix_int_t    ndof2 = 1; /* internal CSC is with 1 DoF */  
-        //     //     void * sortptr[3];                                         
-                                                                        
-        //     //     n = thecsc->cscftab[index].coltab[iter+1] -                         
-        //     //       thecsc->cscftab[index].coltab[iter];                              
-                                                                        
-        //     //     sortptr[0] = t;                                            
-        //     //     sortptr[1] = v;                                            
-        //     //     sortptr[2] = &ndof2;                                       
-        //     //     z_qsortIntFloatAsc(sortptr, n);                              
-        //     //   }                                                            
-        //     // }                                                              
-        //     // memFree_null(trowtab);                
-        //     // pastix_int_t *trowtab, i;
-        //     MALLOC_INTERN( bcsc->Uvalues, strdcol * pastix_size_of( bcsc->flttype ), char );
-        //     // MALLOC_INTERN( trowtab, strdcol, pastix_int_t);
-
-        //     // for (i=0; i<strdcol; i++) {
-        //     //     trowtab[i] = -1;
-        //     // }
-
-        //     // bcsc_zinit_At( spm, ord, solvmtx, col2cblk, trowtab, bcsc );
-
-        //     /* Restore the correct coltab arrays */
-        //     bcsc_restore_coltab( bcsc );
-
-        //     /* Sort the transposed csc */
-        //     bcsc_zsort( bcsc, trowtab, bcsc->Uvalues );
-        //     memFree( trowtab );                         
-        // }   
-        // }     
-            /**
+    // colidx = 0;
+    // for (index=0; index<solvmtx->cblknbr; index++)
+    // {
+    //     for(iter=0;iter<(thecsc->cscftab[index].colnbr+1); iter++)
+    //     {
+    //     newcol = thecsc->cscftab[index].coltab[iter];
+    //     thecsc->cscftab[index].coltab[iter] = colidx;
+    //     colidx = newcol;
+    //     }
+    // }
+    /**
      * Initialize the blocked structure of the matrix A
      */
-        bcsc_zinit_A( spm, ord, solvmtx, col2cblk, bcsc );
-        if ( spm->mtxtype == SpmSymmetric ) {
-            bcsc_zinit_Lt( spm, ord, solvmtx, col2cblk, bcsc );
-        }
-        #if defined(PRECISION_z) || defined(PRECISION_c)
-            else if ( spm->mtxtype == SpmHermitian ) {
-                bcsc_zinit_Lh( spm, ord, solvmtx, col2cblk, bcsc );
-            }
-        #endif /* defined(PRECISION_z) || defined(PRECISION_c) */
+        // if ( spm->mtxtype == SpmSymmetric ) {
+        //     bcsc_zinit_Lt( spm, ord, solvmtx, col2cblk, bcsc );
+        // }
+        // #if defined(PRECISION_z) || defined(PRECISION_c)
+        //     else if ( spm->mtxtype == SpmHermitian ) {
+        //         bcsc_zinit_Lh( spm, ord, solvmtx, col2cblk, bcsc );
+        //     }
+        // #endif /* defined(PRECISION_z) || defined(PRECISION_c) */
 
         /* Restore the correct coltab arrays */
         bcsc_restore_coltab( bcsc );
@@ -1445,15 +1341,7 @@ bcsc_zinit_dist( const spmatrix_t     *spm,
         if ( spm->mtxtype == SpmGeneral ) {
         /* A^t is not required if only refinement is performed */
             if (initAt) {
-                // pastix_int_t *trowtab, i;
-                // MALLOC_INTERN( bcsc->Uvalues, valuesize * pastix_size_of( bcsc->flttype ), char );
-                // MALLOC_INTERN( trowtab, valuesize, pastix_int_t);
-
-                // for (i=0; i<valuesize; i++) {
-                //     trowtab[i] = -1;
-                // }
-
-                bcsc_zinit_At( spm, ord, solvmtx, col2cblk, trowtab, bcsc );
+                // bcsc_zinit_At( spm, ord, solvmtx, col2cblk, trowtab, bcsc );
 
                 /* Restore the correct coltab arrays */
                 bcsc_restore_coltab( bcsc );
@@ -1466,14 +1354,5 @@ bcsc_zinit_dist( const spmatrix_t     *spm,
         else {
             /* In case of SpmHermitian, conj is applied when used to save memory space */
             bcsc->Uvalues = bcsc->Lvalues;
-        }                                                             
-
-    #if (DBG_SOPALIN_TIME==1)
-    clockStop(&(clk));
-    fprintf(stdout, "CscdOrdistrib step 4 : %.3g s\n",
-            (double)clockVal(&clk));
-    #endif
-    #ifdef CSC_LOG
-    fprintf(stdout, "<- CscdOrdistrib \n");
-    #endif
+        }                                   
 }
